@@ -17,7 +17,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
       inputSchema: z.object({
         stack: z.string().describe("Stack name or ID to deploy"),
       }),
-      outputSchema: z.unknown().describe("Deployment result from Komodo"),
+      outputSchema: z.object({}),
     },
     async ({ stack }) => {
       const result = await client.deployStack(stack);
@@ -34,7 +34,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
       inputSchema: z.object({
         stack: z.string().describe("Stack name or ID to start"),
       }),
-      outputSchema: z.unknown().describe("Start stack result"),
+      outputSchema: z.object({}),
     },
     async ({ stack }) => {
       const result = await client.startStack(stack);
@@ -51,7 +51,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
       inputSchema: z.object({
         stack: z.string().describe("Stack name or ID to stop"),
       }),
-      outputSchema: z.unknown().describe("Stop stack result"),
+      outputSchema: z.object({}),
     },
     async ({ stack }) => {
       const result = await client.stopStack(stack);
@@ -68,7 +68,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
       inputSchema: z.object({
         stack: z.string().describe("Stack name or ID to restart"),
       }),
-      outputSchema: z.unknown().describe("Restart stack result"),
+      outputSchema: z.object({}),
     },
     async ({ stack }) => {
       const result = await client.restartStack(stack);
@@ -86,7 +86,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
       inputSchema: z.object({
         stack: z.string().describe("Stack name or ID to destroy"),
       }),
-      outputSchema: z.unknown().describe("Destroy stack result"),
+      outputSchema: z.object({}),
       annotations: { destructiveHint: true },
     },
     async ({ stack }) => {
@@ -104,7 +104,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
       inputSchema: z.object({
         stack: z.string().describe("Stack name or ID"),
       }),
-      outputSchema: z.unknown().describe("Image pull result"),
+      outputSchema: z.object({}),
     },
     async ({ stack }) => {
       const result = await client.pullStackImages(stack);
@@ -122,7 +122,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
         server: z.string().describe("Server name or ID"),
         container: z.string().describe("Container name or ID to start"),
       }),
-      outputSchema: z.unknown().describe("Container start result"),
+      outputSchema: z.object({}),
     },
     async ({ server, container }) => {
       const result = await client.startContainer(server, container);
@@ -140,7 +140,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
         server: z.string().describe("Server name or ID"),
         container: z.string().describe("Container name or ID to stop"),
       }),
-      outputSchema: z.unknown().describe("Container stop result"),
+      outputSchema: z.object({}),
     },
     async ({ server, container }) => {
       const result = await client.stopContainer(server, container);
@@ -158,7 +158,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
         server: z.string().describe("Server name or ID"),
         container: z.string().describe("Container name or ID to restart"),
       }),
-      outputSchema: z.unknown().describe("Container restart result"),
+      outputSchema: z.object({}),
     },
     async ({ server, container }) => {
       const result = await client.restartContainer(server, container);
@@ -175,7 +175,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
       inputSchema: z.object({
         server: z.string().describe("Server name or ID"),
       }),
-      outputSchema: z.unknown().describe("Docker image prune result"),
+      outputSchema: z.object({}),
       annotations: { destructiveHint: true },
     },
     async ({ server }) => {
@@ -193,7 +193,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
       inputSchema: z.object({
         server: z.string().describe("Server name or ID"),
       }),
-      outputSchema: z.unknown().describe("Docker network prune result"),
+      outputSchema: z.object({}),
       annotations: { destructiveHint: true },
     },
     async ({ server }) => {
@@ -212,7 +212,7 @@ export function registerExecuteTools(server: McpServer, client: KomodoClient): v
       inputSchema: z.object({
         server: z.string().describe("Server name or ID"),
       }),
-      outputSchema: z.unknown().describe("Docker system prune result"),
+      outputSchema: z.object({}),
       annotations: { destructiveHint: true },
     },
     async ({ server }) => {

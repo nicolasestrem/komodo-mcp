@@ -22,7 +22,7 @@ export function registerWriteTools(server: McpServer, client: KomodoClient): voi
           .optional()
           .describe("Docker Compose file contents (YAML)"),
       }),
-      outputSchema: z.unknown().describe("Stack creation result"),
+      outputSchema: z.object({}),
     },
     async ({ name, server_id, compose_contents }) => {
       const result = await client.createStack(name, server_id, compose_contents);
@@ -40,7 +40,7 @@ export function registerWriteTools(server: McpServer, client: KomodoClient): voi
         id: z.string().describe("Stack ID to update"),
         config: z.record(z.unknown()).describe("Configuration object to update"),
       }),
-      outputSchema: z.unknown().describe("Stack update result"),
+      outputSchema: z.object({}),
     },
     async ({ id, config }) => {
       const result = await client.updateStack(id, config);
@@ -58,7 +58,7 @@ export function registerWriteTools(server: McpServer, client: KomodoClient): voi
       inputSchema: z.object({
         id: z.string().describe("Stack ID to delete"),
       }),
-      outputSchema: z.unknown().describe("Stack deletion result"),
+      outputSchema: z.object({}),
       annotations: { destructiveHint: true },
     },
     async ({ id }) => {
@@ -77,7 +77,7 @@ export function registerWriteTools(server: McpServer, client: KomodoClient): voi
         stack: z.string().describe("Stack name or ID"),
         contents: z.string().describe("Docker Compose file contents (YAML)"),
       }),
-      outputSchema: z.unknown().describe("Result of writing stack file contents"),
+      outputSchema: z.object({}),
     },
     async ({ stack, contents }) => {
       const result = await client.writeStackFileContents(stack, contents);
@@ -95,7 +95,7 @@ export function registerWriteTools(server: McpServer, client: KomodoClient): voi
         name: z.string().describe("Name for the new server"),
         address: z.string().describe("Periphery address (e.g., https://periphery:8120)"),
       }),
-      outputSchema: z.unknown().describe("Server creation result"),
+      outputSchema: z.object({}),
     },
     async ({ name, address }) => {
       const result = await client.createServer(name, address);
@@ -113,7 +113,7 @@ export function registerWriteTools(server: McpServer, client: KomodoClient): voi
         id: z.string().describe("Server ID to update"),
         config: z.record(z.unknown()).describe("Configuration object to update"),
       }),
-      outputSchema: z.unknown().describe("Server update result"),
+      outputSchema: z.object({}),
     },
     async ({ id, config }) => {
       const result = await client.updateServer(id, config);
@@ -130,7 +130,7 @@ export function registerWriteTools(server: McpServer, client: KomodoClient): voi
       inputSchema: z.object({
         id: z.string().describe("Server ID to delete"),
       }),
-      outputSchema: z.unknown().describe("Server deletion result"),
+      outputSchema: z.object({}),
       annotations: { destructiveHint: true },
     },
     async ({ id }) => {
@@ -149,7 +149,7 @@ export function registerWriteTools(server: McpServer, client: KomodoClient): voi
         id: z.string().describe("Stack ID to rename"),
         name: z.string().describe("New name for the stack"),
       }),
-      outputSchema: z.unknown().describe("Stack rename result"),
+      outputSchema: z.object({}),
     },
     async ({ id, name }) => {
       const result = await client.renameStack(id, name);

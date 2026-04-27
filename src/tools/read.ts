@@ -15,9 +15,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       title: "List Komodo servers",
       description: "List all Komodo servers with their status and configuration",
       inputSchema: z.object({}),
-      outputSchema: z
-        .unknown()
-        .describe("Servers with status and configuration as returned by Komodo"),
+      outputSchema: z.object({}),
     },
     async () => {
       const result = await client.listServers();
@@ -32,9 +30,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       title: "List Komodo stacks",
       description: "List all Komodo stacks with their current state (running/down)",
       inputSchema: z.object({}),
-      outputSchema: z
-        .unknown()
-        .describe("Stacks and their runtime state as reported by Komodo"),
+      outputSchema: z.object({}),
     },
     async () => {
       const result = await client.listStacks();
@@ -49,9 +45,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       title: "List deployments",
       description: "List all Komodo deployments",
       inputSchema: z.object({}),
-      outputSchema: z
-        .unknown()
-        .describe("Deployment metadata as returned by Komodo"),
+      outputSchema: z.object({}),
     },
     async () => {
       const result = await client.listDeployments();
@@ -68,7 +62,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       inputSchema: z.object({
         stack: z.string().describe("Stack name or ID"),
       }),
-      outputSchema: z.unknown().describe("Detailed stack information"),
+      outputSchema: z.object({}),
     },
     async ({ stack }) => {
       const result = await client.getStack(stack);
@@ -85,7 +79,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       inputSchema: z.object({
         stack: z.string().describe("Stack name or ID"),
       }),
-      outputSchema: z.unknown().describe("Log output for the requested stack"),
+      outputSchema: z.object({}),
     },
     async ({ stack }) => {
       const result = await client.getStackLog(stack);
@@ -107,7 +101,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
           .optional()
           .describe("Number of lines to return (default: 100)"),
       }),
-      outputSchema: z.unknown().describe("Log output for the requested container"),
+      outputSchema: z.object({}),
     },
     async ({ server, container, tail }) => {
       const result = await client.getContainerLog(server, container, tail);
@@ -124,7 +118,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       inputSchema: z.object({
         server: z.string().describe("Server name or ID"),
       }),
-      outputSchema: z.unknown().describe("Container listings for the target server"),
+      outputSchema: z.object({}),
     },
     async ({ server }) => {
       const result = await client.listDockerContainers(server);
@@ -142,7 +136,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
         server: z.string().describe("Server name or ID"),
         container: z.string().describe("Container name or ID"),
       }),
-      outputSchema: z.unknown().describe("Detailed inspection data for the container"),
+      outputSchema: z.object({}),
     },
     async ({ server, container }) => {
       const result = await client.inspectDockerContainer(server, container);
@@ -159,7 +153,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       inputSchema: z.object({
         server: z.string().describe("Server name or ID"),
       }),
-      outputSchema: z.unknown().describe("CPU, memory, disk, and other system stats"),
+      outputSchema: z.object({}),
     },
     async ({ server }) => {
       const result = await client.getSystemStats(server);
@@ -176,7 +170,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       inputSchema: z.object({
         server: z.string().describe("Server name or ID"),
       }),
-      outputSchema: z.unknown().describe("Docker images available on the server"),
+      outputSchema: z.object({}),
     },
     async ({ server }) => {
       const result = await client.listDockerImages(server);
@@ -193,7 +187,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       inputSchema: z.object({
         server: z.string().describe("Server name or ID"),
       }),
-      outputSchema: z.unknown().describe("Docker networks configured on the server"),
+      outputSchema: z.object({}),
     },
     async ({ server }) => {
       const result = await client.listDockerNetworks(server);
@@ -210,7 +204,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       inputSchema: z.object({
         server: z.string().describe("Server name or ID"),
       }),
-      outputSchema: z.unknown().describe("Docker volumes available on the server"),
+      outputSchema: z.object({}),
     },
     async ({ server }) => {
       const result = await client.listDockerVolumes(server);
@@ -225,7 +219,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       title: "Get system alerts",
       description: "List all system alerts",
       inputSchema: z.object({}),
-      outputSchema: z.unknown().describe("Alerts currently reported by Komodo"),
+      outputSchema: z.object({}),
     },
     async () => {
       const result = await client.listAlerts();
@@ -244,7 +238,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
         container: z.string().describe("Container name or ID"),
         terms: z.array(z.string()).describe("Search terms to find in logs"),
       }),
-      outputSchema: z.unknown().describe("Matching log entries for the provided search terms"),
+      outputSchema: z.object({}),
     },
     async ({ server, container, terms }) => {
       const result = await client.searchContainerLog(server, container, terms);
@@ -259,9 +253,7 @@ export function registerReadTools(server: McpServer, client: KomodoClient): void
       title: "Get stack services",
       description: "Get summary of all stacks with their services and status",
       inputSchema: z.object({}),
-      outputSchema: z
-        .unknown()
-        .describe("Stacks and associated services with status information"),
+      outputSchema: z.object({}),
     },
     async () => {
       const result = await client.getStacksSummary();

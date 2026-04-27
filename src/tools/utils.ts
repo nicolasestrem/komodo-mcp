@@ -18,6 +18,9 @@ export function formatResult(result: unknown, summary?: string): FormattedResult
 
   const structuredContent: StructuredContent | undefined = (() => {
     if (result === undefined) return undefined;
+    if (Array.isArray(result)) {
+      return { items: result } satisfies StructuredContent;
+    }
     if (typeof result === "object" && result !== null) {
       return result as StructuredContent;
     }
