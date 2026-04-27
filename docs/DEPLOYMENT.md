@@ -2,270 +2,191 @@
 
 Production deployment and configuration guide for Komodo MCP Server.
 
-## Deployment Options
+## Threat Model
 
-| Method | Transport | Use Case |
-|--------|-----------|----------|
-| npm/npx | stdio | Local CLI usage, direct integration |
-| Docker | SSE | Containerized deployments, network access |
-| Docker Compose | SSE | Multi-container setups |
+This server holds Komodo admin credentials. A successful tool invocation can deploy code, prune systems, destroy stacks, or delete server records on every Komodo-managed host. Treat the listener as privileged and protect it accordingly.
 
-## Environment Variables
+| Asset | Adversary | Mitigation |
+|---|---|---|
+| `KOMODO_API_KEY` / `KOMODO_API_SECRET` (root over Komodo) | Anyone with TCP reach to the listener | `MCP_AUTH_TOKEN` (required for non-loopback); loopback-only default bind |
+| Same | Browser tricked via DNS rebinding to 127.0.0.1 | `MCP_ALLOWED_HOSTS`/`MCP_ALLOWED_ORIGINS` allow-lists; Helmet |
+| Token in transit | Network sniffer | TLS-terminating reverse proxy (TLS not done in-process) |
+| Secrets in error messages / logs | Operator copy-paste, log shippers | Pino redaction; `KomodoClient` redacts secrets in error messages, custom `toJSON`/`util.inspect` |
+| Credential exfiltration via misconfigured `KOMODO_ADDRESS` | Operator typo, supply-chain attack | URL parse + http(s) scheme check at construction |
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `KOMODO_ADDRESS` | Yes | - | Komodo Core API URL (e.g., `http://komodo:9120`) |
-| `KOMODO_API_KEY` | Yes | - | API key from Komodo Settings |
-| `KOMODO_API_SECRET` | Yes | - | API secret from Komodo Settings |
-| `MCP_PORT` | No | `3113` | Port for SSE server |
-| `MCP_TRANSPORT` | No | `sse` | Transport mode: `sse` or `stdio` |
+Out of scope: per-tool authorization, audit log of tool invocations beyond pino request logs, multi-tenant isolation.
 
-## Getting Komodo API Credentials
+## Deployment options
 
-1. Log into your Komodo instance
-2. Go to **Settings** → **API Keys**
-3. Click **Create API Key**
-4. Copy the API Key and Secret
-5. Save them securely - the secret is only shown once
+| Method | Transport | Use case |
+|---|---|---|
+| `npx komodo-mcp` (after publish) or `node dist/index.js` | streamable / stdio | Local CLI, direct integration |
+| Docker | streamable / sse | Containerized deployment |
+| Docker Compose (prod profile) | streamable | Hardened production runtime fronted by a reverse proxy |
 
-## Deployment Methods
+## Environment variables
 
-### Method 1: npx (Direct Usage)
+### Komodo upstream
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `KOMODO_ADDRESS` | yes | — | http(s) only. Trailing slash normalized. |
+| `KOMODO_API_KEY` | yes | — | Or `KOMODO_API_KEY_FILE` for Docker secrets. |
+| `KOMODO_API_SECRET` | yes | — | Or `KOMODO_API_SECRET_FILE`. |
+| `KOMODO_TIMEOUT_MS` | no | 30000 | Single deadline shared across retries. |
+| `KOMODO_MAX_RETRIES` | no | 2 | Read-op retries for 5xx/429/transient. |
+| `KOMODO_MAX_CONCURRENCY` | no | 8 | In-flight semaphore. |
 
-Best for local testing and CLI integration.
+### MCP server
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `MCP_TRANSPORT` | no | `streamable` | `streamable` (recommended), `sse` (legacy), `stdio`. |
+| `MCP_PORT` | no | 3113 | |
+| `MCP_BIND_HOST` | no | `127.0.0.1` | Use `0.0.0.0` inside Docker (port mapping is the boundary). |
+| `MCP_AUTH_TOKEN` | conditional | unset | Required for any non-loopback access. Or `MCP_AUTH_TOKEN_FILE`. |
+| `MCP_ALLOWED_ORIGINS` | no | unset | Comma-separated. Empty = no `Origin` enforcement. |
+| `MCP_ALLOWED_HOSTS` | no | `127.0.0.1,localhost` | Comma-separated. DNS-rebinding defense. |
+| `LOG_LEVEL` | no | `info` | Pino level. |
 
-```bash
-export KOMODO_ADDRESS="http://your-komodo-host:9120"
-export KOMODO_API_KEY="your-api-key"
-export KOMODO_API_SECRET="your-api-secret"
-export MCP_TRANSPORT="stdio"
+## Getting Komodo API credentials
 
-npx komodo-mcp
-```
+1. Log into the Komodo web UI.
+2. **Settings → API Keys → Create API Key**.
+3. Copy the key and secret (the secret is only shown once).
 
-### Method 2: Docker
+## Deployment methods
 
-Best for containerized deployments.
+### Method 1: Streamable HTTP via Docker (recommended)
 
-```bash
-docker run -d \
-  --name komodo-mcp \
-  --restart unless-stopped \
-  -p 3113:3113 \
-  -e KOMODO_ADDRESS="http://your-komodo-host:9120" \
-  -e KOMODO_API_KEY="your-api-key" \
-  -e KOMODO_API_SECRET="your-api-secret" \
-  komodo-mcp
-```
+Compose ships two files:
 
-### Method 3: Docker Compose
-
-Best for multi-container setups.
-
-```yaml
-version: "3.8"
-services:
-  komodo-mcp:
-    image: komodo-mcp
-    build: .
-    restart: unless-stopped
-    ports:
-      - "3113:3113"
-    environment:
-      - KOMODO_ADDRESS=${KOMODO_ADDRESS:-http://host.docker.internal:9120}
-      - KOMODO_API_KEY=${KOMODO_API_KEY}
-      - KOMODO_API_SECRET=${KOMODO_API_SECRET}
-      - MCP_PORT=3113
-      - MCP_TRANSPORT=sse
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3113/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-```
-
-Start with:
+- `docker-compose.yml` — base configuration (loopback host port mapping, file-based secrets, `MCP_BIND_HOST=0.0.0.0` inside the container).
+- `docker-compose.prod.yml` — overrides hardening: `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, `pids_limit`, resource limits.
 
 ```bash
-docker compose up -d
+mkdir -p secrets
+openssl rand -hex 32 > secrets/mcp_auth_token
+echo "$KOMODO_API_KEY"    > secrets/komodo_api_key
+echo "$KOMODO_API_SECRET" > secrets/komodo_api_secret
+chmod 600 secrets/*
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-## Transport Modes
+By default the host binding is `127.0.0.1:3113:3113` — the port is reachable on localhost only. Front it with a reverse proxy that terminates TLS for public access.
 
-### stdio Transport
+### Method 2: Streamable HTTP via npm
 
-- **Use when:** Running locally, integrating with MCP-aware applications
-- **Set:** `MCP_TRANSPORT=stdio`
-- **Communication:** Through stdin/stdout
-- **Connections:** Single client
-
-### SSE Transport (Default)
-
-- **Use when:** Running in Docker, network access required
-- **Set:** `MCP_TRANSPORT=sse` (or omit, it's the default)
-- **Communication:** HTTP with Server-Sent Events
-- **Connections:** Multiple concurrent clients
-- **Endpoints:**
-  - `GET /sse` - Establish SSE connection
-  - `POST /messages?sessionId=X` - Send messages
-  - `GET /health` - Health check
-
-## Network Configuration
-
-### Docker Network Access
-
-When Komodo runs on the host machine, use `host.docker.internal`:
-
-```yaml
-environment:
-  - KOMODO_ADDRESS=http://host.docker.internal:9120
-extra_hosts:
-  - "host.docker.internal:host-gateway"
+```bash
+npm install
+npm run build
+MCP_AUTH_TOKEN=$(openssl rand -hex 32) \
+KOMODO_ADDRESS=http://komodo:9120 \
+KOMODO_API_KEY=... KOMODO_API_SECRET=... \
+node dist/index.js
 ```
 
-### Same Docker Network
+### Method 3: stdio (local CLI / Claude Desktop)
 
-When both services are in the same Docker network:
+Stdio transport runs without an HTTP listener — auth is implicit (the OS pipes are local). Logs go to stderr.
 
-```yaml
-environment:
-  - KOMODO_ADDRESS=http://komodo-core:9120
-networks:
-  - komodo-network
+```bash
+MCP_TRANSPORT=stdio \
+KOMODO_ADDRESS=http://komodo:9120 \
+KOMODO_API_KEY=... KOMODO_API_SECRET=... \
+node dist/index.js
 ```
 
-## Security Considerations
+### Method 4: Legacy SSE (`MCP_TRANSPORT=sse`)
 
-### API Credentials
+Two endpoints (`/sse` + `/messages`) for clients that don't speak Streamable HTTP. Keep this only for transitional compatibility.
 
-- **Never commit credentials** to version control
-- Use environment variables or Docker secrets
-- Rotate API keys periodically
-- Use least-privilege API keys when possible
+## Transport modes
 
-### Network Security
+| Mode | Endpoint(s) | Connections | Notes |
+|---|---|---|---|
+| streamable (default) | `POST/GET/DELETE /mcp` | Many; per-session McpServer | Recommended. Supports SSE upstream + JSON. |
+| sse (legacy) | `GET /sse`, `POST /messages?sessionId=…` | Many; per-session McpServer | Legacy. Slated for removal in a future major. |
+| stdio | (none) | Single | Local CLI; logs on stderr. |
 
-- **SSE endpoint binds to 0.0.0.0** - accessible from all interfaces
-- Use a reverse proxy (nginx, Traefik) for TLS termination
-- Restrict network access with firewall rules
-- Consider running in an isolated Docker network
+## Reverse-proxy topology (canonical for non-loopback)
 
-### Reverse Proxy Example (nginx)
+```
+Internet ──TLS──> nginx/Traefik ──http──> komodo-mcp (127.0.0.1:3113)
+                                          │
+                                          └─ KOMODO_ADDRESS=http://komodo-core:9120
+```
+
+The MCP container should bind only on the loopback interface of the host (handled by the compose override `127.0.0.1:3113:3113`), and the reverse proxy is the only thing that listens publicly.
+
+### nginx
 
 ```nginx
 server {
-    listen 443 ssl;
-    server_name mcp.yourdomain.com;
+    listen 443 ssl http2;
+    server_name mcp.example.com;
+    ssl_certificate     /etc/letsencrypt/live/mcp.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mcp.example.com/privkey.pem;
 
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-
-    location / {
-        proxy_pass http://localhost:3113;
+    location /mcp {
+        proxy_pass http://127.0.0.1:3113;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_buffering off;        # SSE upstream
+        proxy_read_timeout 86400s;
+    }
 
-        # SSE specific settings
-        proxy_buffering off;
-        proxy_read_timeout 86400;
+    location /health {
+        proxy_pass http://127.0.0.1:3113;
     }
 }
 ```
 
-### Reverse Proxy Example (Traefik)
+Then set `MCP_ALLOWED_HOSTS=mcp.example.com,127.0.0.1,localhost`.
+
+### Traefik
 
 ```yaml
 labels:
-  - "traefik.enable=true"
-  - "traefik.http.routers.komodo-mcp.rule=Host(`mcp.yourdomain.com`)"
-  - "traefik.http.routers.komodo-mcp.tls=true"
-  - "traefik.http.services.komodo-mcp.loadbalancer.server.port=3113"
+  - traefik.enable=true
+  - traefik.http.routers.komodo-mcp.rule=Host(`mcp.example.com`)
+  - traefik.http.routers.komodo-mcp.tls=true
+  - traefik.http.routers.komodo-mcp.tls.certresolver=letsencrypt
+  - traefik.http.services.komodo-mcp.loadbalancer.server.port=3113
 ```
 
-## Health Monitoring
+## Multi-replica caveat
 
-### Health Check Endpoint
+Sessions are stateful in-memory (per-session `McpServer`). Streamable HTTP propagates an `mcp-session-id` header which clients send on follow-up requests; multi-replica deployments need sticky sessions keyed on that header. Until then, run single-replica or fronted by a sticky-session-aware load balancer.
 
-```bash
-curl http://localhost:3113/health
-```
+## Health monitoring
 
-Response:
+`/health` is anonymous and returns:
 
 ```json
-{
-  "status": "ok",
-  "transport": "sse",
-  "port": 3113,
-  "activeSessions": 2
-}
+{ "status": "ok", "transport": "streamable", "port": 3113 }
 ```
 
-### Docker Health Check
+Use this for liveness probes. There is no readiness endpoint that reaches out to Komodo Core today (planned).
 
-The container includes a built-in health check:
+## Claude Desktop integration
 
-```bash
-docker inspect --format='{{.State.Health.Status}}' komodo-mcp
-```
+Add to your Claude Desktop config:
 
-### Monitoring Active Sessions
-
-The `/health` endpoint reports `activeSessions` count for monitoring concurrent connections.
-
-## Troubleshooting
-
-### Container Won't Start
-
-```bash
-# Check logs
-docker logs komodo-mcp
-
-# Common issues:
-# - Missing environment variables
-# - Cannot reach Komodo API
-# - Port already in use
-```
-
-### Connection Refused
-
-1. Verify Komodo is running: `curl http://your-komodo-host:9120`
-2. Check network connectivity from container
-3. Verify firewall rules allow the connection
-
-### API Authentication Errors
-
-1. Verify API key and secret are correct
-2. Check API key has required permissions
-3. Ensure credentials aren't expired
-
-### SSE Connection Drops
-
-1. Check proxy timeout settings (increase if needed)
-2. Verify proxy has SSE-compatible configuration
-3. Check for network interruptions
-
-## Claude Desktop Integration
-
-Add to your Claude Desktop config (`~/.config/claude/claude_desktop_config.json` on Linux):
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "komodo": {
-      "command": "npx",
-      "args": ["komodo-mcp"],
+      "command": "node",
+      "args": ["/absolute/path/to/komodo-mcp/dist/index.js"],
       "env": {
-        "KOMODO_ADDRESS": "http://your-komodo-host:9120",
-        "KOMODO_API_KEY": "your-api-key",
-        "KOMODO_API_SECRET": "your-api-secret",
+        "KOMODO_ADDRESS": "http://your-komodo:9120",
+        "KOMODO_API_KEY": "your-key",
+        "KOMODO_API_SECRET": "your-secret",
         "MCP_TRANSPORT": "stdio"
       }
     }
@@ -273,18 +194,14 @@ Add to your Claude Desktop config (`~/.config/claude/claude_desktop_config.json`
 }
 ```
 
-## Performance Tuning
+## Performance tuning
 
-### Connection Limits
+- `KOMODO_MAX_CONCURRENCY` — bound concurrent requests to Komodo Core (default 8).
+- `KOMODO_MAX_RETRIES` — read retry budget; raise for flaky upstreams.
+- `KOMODO_TIMEOUT_MS` — single shared deadline across retries.
+- The shared `undici.Agent` keeps connections warm (30s keep-alive, 16 per-host).
+- Memory: ~50–100 MB per instance idle.
 
-For high-connection scenarios, consider:
+## Troubleshooting
 
-- Increasing Node.js memory: `NODE_OPTIONS="--max-old-space-size=512"`
-- Using a connection pooling proxy
-- Running multiple instances behind a load balancer
-
-### Resource Requirements
-
-- **Memory:** ~50-100MB per instance
-- **CPU:** Minimal (mostly I/O bound)
-- **Connections:** Limited by system file descriptors
+See [`docs/RUNBOOK.md`](RUNBOOK.md) for a runbook covering token rotation, draining a node before deploy, rolling back, stuck sessions, and common 401/403/500 paths.

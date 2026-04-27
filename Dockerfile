@@ -1,57 +1,47 @@
-# Multi-stage build for Komodo MCP Server
+# syntax=docker/dockerfile:1.7
 
-# Build stage
-FROM node:20-alpine AS builder
+# ---------- Build stage ----------
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
-
-# Install all dependencies (including devDependencies for build)
+# Use lockfile-deterministic install for reproducible builds.
+COPY package.json package-lock.json ./
 RUN npm ci
 
-# Copy source code
 COPY tsconfig.json ./
 COPY src/ ./src/
-
-# Build TypeScript
 RUN npm run build
 
-# Production stage
-FROM node:20-alpine
+# ---------- Production stage ----------
+FROM node:22-alpine
 
 WORKDIR /app
 
-# Create non-root user for security
-RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+# wget is present in the base image; we use it for HEALTHCHECK below.
 
-# Copy package files
-COPY package*.json ./
+# Non-root user.
+RUN addgroup -g 1001 -S nodejs && adduser -S -u 1001 -G nodejs nodejs
 
-# Install only production dependencies
-RUN npm ci --only=production && npm cache clean --force
+# Production dependency tree only.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy built files from builder
 COPY --from=builder /app/dist ./dist
-
-# Change ownership to non-root user
 RUN chown -R nodejs:nodejs /app
 
-# Switch to non-root user
 USER nodejs
 
-# Set environment variables
-ENV NODE_ENV=production
-ENV MCP_TRANSPORT=sse
-ENV MCP_PORT=3113
+ENV NODE_ENV=production \
+    MCP_TRANSPORT=streamable \
+    MCP_PORT=3113 \
+    # The container's network interface is the boundary — bind to 0.0.0.0
+    # inside; the host port mapping (or reverse proxy) controls exposure.
+    MCP_BIND_HOST=0.0.0.0
 
-# Expose port
 EXPOSE 3113
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD node -e "fetch('http://localhost:3113/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://127.0.0.1:3113/health || exit 1
 
-# Run the server
 CMD ["node", "dist/index.js"]

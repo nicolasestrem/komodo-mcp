@@ -30,3 +30,11 @@ coverage/
 # Temporary files
 tmp/
 temp/
+/.full-review
+
+# Local Docker secrets (file-based)
+secrets/*
+!secrets/.gitkeep
+
+# TypeScript build cache
+*.tsbuildinfo

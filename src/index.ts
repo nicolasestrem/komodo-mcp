@@ -1,106 +1,428 @@
 #!/usr/bin/env node
 
 /**
- * Komodo MCP Server
+ * Komodo MCP Server entry point.
  *
- * An MCP server that provides full access to the Komodo API
- * for Docker/container management and deployment.
+ * Supports three transports:
+ *   - streamable (default): MCP Streamable HTTP on `/mcp`. Single endpoint
+ *     handling POST + optional SSE upstream + DELETE for session close.
+ *   - sse (legacy): two-endpoint SSE transport on `/sse` and `/messages`.
+ *   - stdio: pipe-based transport for local CLI usage (no HTTP server).
  *
- * Supports both stdio and SSE transports.
+ * The HTTP server is fronted by:
+ *   - helmet (security headers)
+ *   - cors (configured via MCP_ALLOWED_ORIGINS)
+ *   - validateOriginAndHost (DNS-rebinding defense — strict allow-list, defense
+ *     in depth on top of CORS)
+ *   - requireAuth (constant-time bearer-token compare, with loopback-only
+ *     fallback when no token is configured)
+ *   - pino-http (structured request logging with header redaction)
+ *
+ * All session state is per-connection: each new SSE/Streamable session
+ * instantiates its own `McpServer` so concurrent clients can never bleed state.
  */
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
+import type { Server as HttpServer } from "node:http";
+
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import express, { Request, Response } from "express";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import cors from "cors";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
+import helmet from "helmet";
+import pino from "pino";
+import { pinoHttp } from "pino-http";
+
+import { KomodoClient } from "./komodo-client.js";
 import { createServer } from "./server.js";
 
-const PORT = parseInt(process.env.MCP_PORT || "3113", 10);
-const TRANSPORT = process.env.MCP_TRANSPORT || "sse";
+// ---------- env parsing ----------
 
-async function main() {
-  const { server } = createServer();
+const env = process.env;
 
-  if (TRANSPORT === "stdio") {
-    // Stdio transport for local usage
-    console.error("Starting Komodo MCP server with stdio transport...");
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-    console.error("Komodo MCP server running on stdio");
-  } else {
-    // SSE transport for Docker/network usage
-    const app = express();
-    app.use(express.json());
-
-    // Store active transports by session ID
-    const transports: Record<string, SSEServerTransport> = {};
-
-    // SSE endpoint
-    app.get("/sse", async (req: Request, res: Response) => {
-      console.log("New SSE connection");
-
-      try {
-        const transport = new SSEServerTransport("/messages", res);
-        const sessionId = transport.sessionId;
-        transports[sessionId] = transport;
-
-        // Clean up on disconnect
-        transport.onclose = () => {
-          console.log(`SSE connection closed for session ${sessionId}`);
-          delete transports[sessionId];
-        };
-
-        // Connect server to transport
-        await server.connect(transport);
-        console.log(`Established SSE stream with session ID: ${sessionId}`);
-      } catch (error) {
-        console.error("Error establishing SSE stream:", error);
-        if (!res.headersSent) {
-          res.status(500).send("Error establishing SSE stream");
-        }
-      }
-    });
-
-    // Message endpoint for client-to-server communication
-    app.post("/messages", async (req: Request, res: Response) => {
-      const sessionId = req.query.sessionId as string;
-
-      if (!sessionId) {
-        console.error("No session ID provided in request URL");
-        res.status(400).json({ error: "Missing sessionId parameter" });
-        return;
-      }
-
-      const transport = transports[sessionId];
-      if (!transport) {
-        console.error(`No active transport for session: ${sessionId}`);
-        res.status(404).json({ error: "Session not found" });
-        return;
-      }
-
-      try {
-        await transport.handlePostMessage(req, res, req.body);
-      } catch (error) {
-        console.error("Error handling message:", error);
-        if (!res.headersSent) {
-          res.status(500).json({ error: "Error handling request" });
-        }
-      }
-    });
-
-    // Health check endpoint
-    app.get("/health", (_req: Request, res: Response) => {
-      res.json({ status: "ok", transport: "sse", port: PORT, activeSessions: Object.keys(transports).length });
-    });
-
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Komodo MCP server running on http://0.0.0.0:${PORT}`);
-      console.log(`SSE endpoint: http://0.0.0.0:${PORT}/sse`);
-      console.log(`Health check: http://0.0.0.0:${PORT}/health`);
-    });
+function readEnvOrFile(name: string): string | undefined {
+  const direct = env[name];
+  if (direct && direct.length > 0) return direct;
+  const filePath = env[`${name}_FILE`];
+  if (filePath && filePath.length > 0) {
+    return readFileSync(filePath, "utf8").trim();
   }
+  return undefined;
 }
 
-main().catch((error) => {
-  console.error("Fatal error:", error);
+const portRaw = env["MCP_PORT"] ?? "3113";
+const portParsed = Number.parseInt(portRaw, 10);
+if (!Number.isInteger(portParsed) || portParsed < 1 || portParsed > 65535) {
+  console.error(`Invalid MCP_PORT: ${portRaw}`);
   process.exit(1);
-});
+}
+const PORT = portParsed;
+
+const TRANSPORT = (env["MCP_TRANSPORT"] ?? "streamable") as "streamable" | "sse" | "stdio";
+if (TRANSPORT !== "streamable" && TRANSPORT !== "sse" && TRANSPORT !== "stdio") {
+  console.error(`Invalid MCP_TRANSPORT: ${TRANSPORT} (expected "streamable", "sse", or "stdio")`);
+  process.exit(1);
+}
+
+const BIND_HOST = env["MCP_BIND_HOST"] ?? "127.0.0.1";
+const AUTH_TOKEN = readEnvOrFile("MCP_AUTH_TOKEN");
+const ALLOWED_ORIGINS = (env["MCP_ALLOWED_ORIGINS"] ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const ALLOWED_HOSTS = (env["MCP_ALLOWED_HOSTS"] ?? "127.0.0.1,localhost")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+// ---------- logger ----------
+// Always write to stderr — keeps stdio transport's stdout channel clean and is
+// fine for Docker (Docker captures both streams).
+export const logger = pino(
+  {
+    level: env["LOG_LEVEL"] ?? "info",
+    redact: {
+      paths: [
+        'req.headers["authorization"]',
+        'req.headers["x-api-key"]',
+        'req.headers["x-api-secret"]',
+        'res.headers["set-cookie"]',
+      ],
+      censor: "[redacted]",
+    },
+  },
+  pino.destination(2)
+);
+
+// ---------- auth & origin/host middleware ----------
+
+/**
+ * Compare two strings in constant time using SHA-256 digests of fixed length.
+ * Hashing first prevents leaking the token's length via the early-return path
+ * a naive byte compare would take when the lengths differ.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
+
+/**
+ * Bearer-token auth gate. If no `MCP_AUTH_TOKEN` is configured, only loopback
+ * IPs are admitted — this keeps `npm start` ergonomic for local dev while
+ * refusing any non-loopback access until the operator explicitly opts in by
+ * setting a token.
+ */
+function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  if (!AUTH_TOKEN) {
+    const ip = req.ip ?? "";
+    const isLoopback =
+      ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip.startsWith("127.");
+    if (!isLoopback) {
+      res.status(401).json({
+        error:
+          "MCP_AUTH_TOKEN is not configured; non-loopback access is refused. Set MCP_AUTH_TOKEN to enable remote access.",
+      });
+      return;
+    }
+    next();
+    return;
+  }
+  const header = req.header("authorization") ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token || !constantTimeEqual(token, AUTH_TOKEN)) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  next();
+}
+
+/**
+ * Defense-in-depth against DNS rebinding and cross-origin attacks. Even if a
+ * browser is tricked into pointing at 127.0.0.1, the `Host` header it sends
+ * will be the attacker's domain — which won't match the allow-list and is
+ * rejected here before any handler runs. CORS handles the same thing for
+ * compliant browsers; this catches the rest.
+ */
+function validateOriginAndHost(req: Request, res: Response, next: NextFunction): void {
+  const origin = req.header("origin");
+  if (origin && ALLOWED_ORIGINS.length > 0 && !ALLOWED_ORIGINS.includes(origin)) {
+    res.status(403).json({ error: "forbidden origin" });
+    return;
+  }
+  const host = (req.header("host") ?? "").toLowerCase();
+  const hostName = host.split(":")[0] ?? "";
+  if (!ALLOWED_HOSTS.includes(hostName)) {
+    res.status(403).json({ error: "forbidden host" });
+    return;
+  }
+  next();
+}
+
+// ---------- Express app factory ----------
+
+export interface BuildAppOptions {
+  /** Optional pre-built KomodoClient — used by tests to inject a fake. */
+  client?: KomodoClient;
+}
+
+export interface AppHandle {
+  app: Express;
+  closeAll: () => Promise<void>;
+}
+
+export function buildApp(options: BuildAppOptions = {}): AppHandle {
+  const sharedClient = options.client;
+
+  const app = express();
+  app.disable("x-powered-by");
+
+  // Trust the loopback proxy only — req.ip then reflects X-Forwarded-For when
+  // running behind a sidecar reverse proxy on the same host.
+  app.set("trust proxy", "loopback");
+
+  app.use(
+    pinoHttp({
+      logger,
+      customLogLevel: (_req, res, err) => {
+        if (err || res.statusCode >= 500) return "error";
+        if (res.statusCode >= 400) return "warn";
+        return "info";
+      },
+    })
+  );
+  app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(
+    cors({
+      origin: ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : false,
+      methods: ["GET", "POST", "DELETE", "OPTIONS"],
+      credentials: false,
+    })
+  );
+  app.use(express.json({ limit: "2mb" }));
+
+  app.get("/health", (_req: Request, res: Response) => {
+    res.json({
+      status: "ok",
+      transport: TRANSPORT,
+      port: PORT,
+    });
+  });
+
+  // Per-session state. Each entry owns one McpServer and one transport.
+  type StreamableSession = {
+    transport: StreamableHTTPServerTransport;
+    close: () => Promise<void>;
+  };
+  type SseSession = { transport: SSEServerTransport; close: () => Promise<void> };
+  const streamableSessions: Map<string, StreamableSession> = new Map();
+  const sseSessions: Map<string, SseSession> = new Map();
+
+  if (TRANSPORT === "streamable") {
+    mountStreamable(app, streamableSessions, sharedClient);
+  } else if (TRANSPORT === "sse") {
+    mountSse(app, sseSessions, sharedClient);
+  }
+
+  // Final 4-arg error middleware — converts any uncaught handler error into a
+  // 500 response without leaking internals.
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    logger.error({ err, path: req.path }, "unhandled error");
+    if (!res.headersSent) {
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  const closeAll = async () => {
+    const ops: Promise<unknown>[] = [];
+    for (const session of streamableSessions.values()) {
+      ops.push(session.close().catch(() => undefined));
+    }
+    for (const session of sseSessions.values()) {
+      ops.push(session.close().catch(() => undefined));
+    }
+    streamableSessions.clear();
+    sseSessions.clear();
+    await Promise.all(ops);
+  };
+
+  return { app, closeAll };
+}
+
+// ---------- Streamable HTTP wiring ----------
+
+function mountStreamable(
+  app: Express,
+  sessions: Map<string, { transport: StreamableHTTPServerTransport; close: () => Promise<void> }>,
+  sharedClient: KomodoClient | undefined
+): void {
+  const handler = async (req: Request, res: Response) => {
+    try {
+      const sessionIdHeader = req.header("mcp-session-id") ?? undefined;
+      const existing = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
+
+      if (existing) {
+        await existing.transport.handleRequest(req, res, req.body);
+        return;
+      }
+
+      // No existing session → create a new transport+server pair.
+      const { server } = createServer(sharedClient ? { client: sharedClient } : {});
+      // Re-entry guard: once we start tearing down, don't recurse through
+      // server.close() ↔ transport.close() ↔ onclose.
+      let closing = false;
+      const cleanup = async () => {
+        if (closing) return;
+        closing = true;
+        const sid = transport.sessionId;
+        if (sid) sessions.delete(sid);
+        await server.close().catch(() => undefined);
+      };
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+        onsessioninitialized: (sid: string) => {
+          sessions.set(sid, { transport, close: cleanup });
+          logger.info({ sessionId: sid }, "streamable session opened");
+        },
+        onsessionclosed: async (sid: string) => {
+          logger.info({ sessionId: sid }, "streamable session closed");
+          await cleanup();
+        },
+      });
+
+      transport.onclose = () => {
+        cleanup().catch(() => undefined);
+      };
+
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (err) {
+      logger.error({ err }, "streamable handler failure");
+      if (!res.headersSent) {
+        res.status(500).json({ error: "internal error" });
+      }
+    }
+  };
+
+  app.all("/mcp", validateOriginAndHost, requireAuth, handler);
+}
+
+// ---------- legacy SSE wiring ----------
+
+function mountSse(
+  app: Express,
+  sessions: Map<string, { transport: SSEServerTransport; close: () => Promise<void> }>,
+  sharedClient: KomodoClient | undefined
+): void {
+  app.get("/sse", validateOriginAndHost, requireAuth, async (_req: Request, res: Response) => {
+    const { server } = createServer(sharedClient ? { client: sharedClient } : {});
+    const transport = new SSEServerTransport("/messages", res);
+    const sessionId = transport.sessionId;
+
+    transport.onclose = async () => {
+      sessions.delete(sessionId);
+      await server.close().catch(() => undefined);
+      logger.info({ sessionId }, "sse session closed");
+    };
+
+    try {
+      await server.connect(transport);
+      sessions.set(sessionId, {
+        transport,
+        close: async () => {
+          await server.close().catch(() => undefined);
+        },
+      });
+      logger.info({ sessionId }, "sse session opened");
+    } catch (err) {
+      sessions.delete(sessionId);
+      await server.close().catch(() => undefined);
+      logger.error({ err }, "sse connect failed");
+      if (!res.headersSent) {
+        res.status(500).send("Error establishing SSE stream");
+      }
+    }
+  });
+
+  app.post("/messages", validateOriginAndHost, requireAuth, async (req: Request, res: Response) => {
+    const sessionId = req.query["sessionId"] as string | undefined;
+    if (!sessionId) {
+      res.status(400).json({ error: "Missing sessionId parameter" });
+      return;
+    }
+    const session = sessions.get(sessionId);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    try {
+      await (session.transport as SSEServerTransport).handlePostMessage(req, res, req.body);
+    } catch (err) {
+      logger.error({ err }, "sse message handler failure");
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Error handling request" });
+      }
+    }
+  });
+}
+
+// ---------- main ----------
+
+async function main(): Promise<void> {
+  if (TRANSPORT === "stdio") {
+    const { server } = createServer();
+    logger.info("starting stdio transport");
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    logger.info("stdio transport ready");
+    return;
+  }
+
+  const { app, closeAll } = buildApp();
+  const httpServer: HttpServer = app.listen(PORT, BIND_HOST, () => {
+    logger.info(
+      {
+        bindHost: BIND_HOST,
+        port: PORT,
+        transport: TRANSPORT,
+        authConfigured: Boolean(AUTH_TOKEN),
+      },
+      "komodo-mcp listening"
+    );
+    if (!AUTH_TOKEN) {
+      logger.warn("MCP_AUTH_TOKEN not set; only loopback (127.0.0.1) requests will be accepted");
+    }
+  });
+
+  const shutdown = async (signal: NodeJS.Signals) => {
+    logger.info({ signal }, "shutdown initiated");
+    httpServer.close((err) => {
+      if (err) logger.error({ err }, "httpServer.close error");
+    });
+    await closeAll();
+    // Hard cap: if anything is hung, exit anyway after 15s.
+    const hardExit = setTimeout(() => {
+      logger.warn("forced exit after 15s grace period");
+      process.exit(1);
+    }, 15_000);
+    hardExit.unref();
+  };
+
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+}
+
+// Only run main when invoked as a binary, not when imported by tests.
+const invokedDirectly =
+  import.meta.url === `file://${process.argv[1]}` ||
+  process.argv[1]?.endsWith("dist/index.js") === true;
+
+if (invokedDirectly) {
+  main().catch((error) => {
+    logger.error({ error }, "fatal error");
+    process.exit(1);
+  });
+}

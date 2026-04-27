@@ -1,0 +1,26 @@
+# Production hardening overlay. Apply on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  komodo-mcp:
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 128M
+    # In production, reverse proxy fronts the service. Keep host port mapping
+    # on loopback only.
+    ports: !override
+      - "127.0.0.1:3113:3113"
+    environment:
+      - LOG_LEVEL=info
