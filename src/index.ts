@@ -22,7 +22,7 @@
  * instantiates its own `McpServer` so concurrent clients can never bleed state.
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Server as HttpServer } from "node:http";
 
@@ -47,7 +47,12 @@ function readEnvOrFile(name: string): string | undefined {
   if (direct && direct.length > 0) return direct;
   const filePath = env[`${name}_FILE`];
   if (filePath && filePath.length > 0) {
-    return readFileSync(filePath, "utf8").trim();
+    try {
+      return readFileSync(filePath, "utf8").trim();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to read ${name}_FILE (${filePath}): ${message}`);
+    }
   }
   return undefined;
 }
@@ -193,6 +198,12 @@ export function buildApp(options: BuildAppOptions = {}): AppHandle {
       },
     })
   );
+  // CSP is disabled because this server only emits JSON and SSE event streams
+  // — there is no HTML surface for a CSP to protect. Helmet's other defaults
+  // (X-Content-Type-Options, X-Frame-Options, Strict-Transport-Security on
+  // HTTPS, etc.) still apply and are useful for any error pages Express might
+  // render. If an HTML response path is ever added, re-enable CSP here with a
+  // strict `default-src 'none'` policy.
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(
     cors({
@@ -220,10 +231,18 @@ export function buildApp(options: BuildAppOptions = {}): AppHandle {
   const streamableSessions: Map<string, StreamableSession> = new Map();
   const sseSessions: Map<string, SseSession> = new Map();
 
+  // Cap concurrent sessions to prevent an authenticated-but-misbehaving (or
+  // unauthenticated-loopback) client from exhausting memory by opening
+  // unbounded sessions. Override with MCP_MAX_SESSIONS.
+  const maxSessionsRaw = env["MCP_MAX_SESSIONS"] ?? "100";
+  const maxSessionsParsed = Number.parseInt(maxSessionsRaw, 10);
+  const MAX_SESSIONS =
+    Number.isInteger(maxSessionsParsed) && maxSessionsParsed > 0 ? maxSessionsParsed : 100;
+
   if (TRANSPORT === "streamable") {
-    mountStreamable(app, streamableSessions, sharedClient);
+    mountStreamable(app, streamableSessions, sharedClient, MAX_SESSIONS);
   } else if (TRANSPORT === "sse") {
-    mountSse(app, sseSessions, sharedClient);
+    mountSse(app, sseSessions, sharedClient, MAX_SESSIONS);
   }
 
   // Final 4-arg error middleware — converts any uncaught handler error into a
@@ -256,7 +275,8 @@ export function buildApp(options: BuildAppOptions = {}): AppHandle {
 function mountStreamable(
   app: Express,
   sessions: Map<string, { transport: StreamableHTTPServerTransport; close: () => Promise<void> }>,
-  sharedClient: KomodoClient | undefined
+  sharedClient: KomodoClient | undefined,
+  maxSessions: number
 ): void {
   const handler = async (req: Request, res: Response) => {
     try {
@@ -265,6 +285,12 @@ function mountStreamable(
 
       if (existing) {
         await existing.transport.handleRequest(req, res, req.body);
+        return;
+      }
+
+      if (sessions.size >= maxSessions) {
+        logger.warn({ active: sessions.size, max: maxSessions }, "session cap reached");
+        res.status(503).json({ error: "session capacity exhausted" });
         return;
       }
 
@@ -282,7 +308,7 @@ function mountStreamable(
       };
 
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
+        sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid: string) => {
           sessions.set(sid, { transport, close: cleanup });
           logger.info({ sessionId: sid }, "streamable session opened");
@@ -307,7 +333,12 @@ function mountStreamable(
     }
   };
 
-  app.all("/mcp", validateOriginAndHost, requireAuth, handler);
+  // Streamable HTTP only uses GET (open SSE upstream), POST (request), and
+  // DELETE (close session). Restricting to those keeps stray verbs from
+  // creating orphan sessions via the new-session path above.
+  app.get("/mcp", validateOriginAndHost, requireAuth, handler);
+  app.post("/mcp", validateOriginAndHost, requireAuth, handler);
+  app.delete("/mcp", validateOriginAndHost, requireAuth, handler);
 }
 
 // ---------- legacy SSE wiring ----------
@@ -315,9 +346,15 @@ function mountStreamable(
 function mountSse(
   app: Express,
   sessions: Map<string, { transport: SSEServerTransport; close: () => Promise<void> }>,
-  sharedClient: KomodoClient | undefined
+  sharedClient: KomodoClient | undefined,
+  maxSessions: number
 ): void {
   app.get("/sse", validateOriginAndHost, requireAuth, async (_req: Request, res: Response) => {
+    if (sessions.size >= maxSessions) {
+      logger.warn({ active: sessions.size, max: maxSessions }, "sse session cap reached");
+      res.status(503).json({ error: "session capacity exhausted" });
+      return;
+    }
     const { server } = createServer(sharedClient ? { client: sharedClient } : {});
     const transport = new SSEServerTransport("/messages", res);
     const sessionId = transport.sessionId;

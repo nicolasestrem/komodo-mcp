@@ -121,7 +121,13 @@ function renderTool(t) {
       const required = info.optional || info.default !== undefined ? "no" : "yes";
       const def = info.default !== undefined ? `\`${JSON.stringify(info.default)}\`` : "—";
       const bounds = info.bounds.length ? info.bounds.join("; ") : "—";
-      const desc = (info.description ?? "").replace(/\|/g, "\\|");
+      // Escape backslashes first (so we don't double-escape our own `\|`),
+      // then pipes for table-cell safety, and collapse newlines so a
+      // multi-line description can't break the table row.
+      const desc = (info.description ?? "")
+        .replace(/\\/g, "\\\\")
+        .replace(/\|/g, "\\|")
+        .replace(/\r?\n/g, " ");
       lines.push(`| \`${name}\` | \`${info.type}\` | ${required} | ${def} | ${bounds} | ${desc || "—"} |`);
     }
   }

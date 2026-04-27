@@ -6,10 +6,15 @@
  * its own MCP server instance.
  */
 
+import { createRequire } from "node:module";
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { KomodoClient } from "./komodo-client.js";
 import { registerAll } from "./tools/registry.js";
+
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json") as { version: string };
 
 export interface CreateServerOptions {
   client?: KomodoClient;
@@ -23,7 +28,7 @@ export function createServer(options: CreateServerOptions = {}): {
 
   const server = new McpServer({
     name: "komodo",
-    version: "1.0.0",
+    version: pkg.version,
   });
 
   registerAll(server, client);

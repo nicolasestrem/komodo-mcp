@@ -171,7 +171,12 @@ export class KomodoClient {
   async #request<T>(endpoint: "read" | "write" | "execute", body: KomodoRequest): Promise<T> {
     const url = `${this.address}/${endpoint}`;
     const payload = JSON.stringify(body);
-    const attempts = endpoint === "read" ? this.maxRetries : 1;
+    // All endpoints get `maxRetries` attempts so pre-send transport errors
+    // (DNS, ECONNREFUSED, etc.) can retry on any verb per ADR 0003. The
+    // read-only restriction is enforced inside the loop: `#shouldRetry`
+    // (status-based) and the post-send `#isTransientError` branch both check
+    // `endpoint === "read"` before continuing.
+    const attempts = this.maxRetries;
     const deadline = this.#clock.now() + this.timeoutMs;
 
     let lastError: unknown;
