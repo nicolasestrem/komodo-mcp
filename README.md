@@ -1,194 +1,210 @@
 # Komodo MCP Server
 
-An MCP (Model Context Protocol) server that provides AI assistants with full access to [Komodo](https://komo.do) - a powerful Docker/container management and deployment system.
+An MCP (Model Context Protocol) server that exposes [Komodo](https://komo.do) — a Docker/container management and deployment system — to AI assistants.
 
-## Features
+## Highlights
 
-- **35 tools** covering the full Komodo API
-- **Read operations**: List stacks, servers, containers, images, networks, volumes, logs
-- **Execute operations**: Deploy, start, stop, restart, destroy stacks and containers
-- **Write operations**: Create, update, delete stacks and servers
-- **Docker deployment**: Run as a container managed by Komodo itself
-- **SSE transport**: Real-time communication with Claude Code and other MCP clients
+- **35 tools** across read / execute / write categories
+- **Streamable HTTP transport** (default) per the latest MCP spec, plus legacy SSE and stdio
+- **Per-session `McpServer`** — concurrent clients are isolated
+- **Bearer-token auth** with constant-time compare; loopback-only fallback when no token is configured
+- **DNS-rebinding defense** via strict `Origin` and `Host` allow-lists
+- **Helmet** security headers; **CORS** allow-list
+- **Pino** structured logs with `Authorization`/`X-Api-Secret`/`X-Api-Key` redaction
+- **Graceful shutdown** on `SIGTERM`/`SIGINT`
+- **Strict input schemas**: bounded `tail`, `terms`, `compose_contents`; `update_stack`/`update_server` reject keys matching `secret*`/`password*`/`api_key`/`token`
+- **Connection pooling** via shared `undici.Agent` (keep-alive 30s, 16 connections); per-process concurrency cap via `p-limit`
 
 ## Quick Start
 
-### Using Docker (Recommended)
+### Local (loopback) with Docker Compose
 
-1. Clone this repository:
 ```bash
 git clone https://github.com/nicolasestrem/komodo-mcp.git
 cd komodo-mcp
-```
-
-2. Create your environment file:
-```bash
 cp .env.example .env
-# Edit .env with your Komodo API credentials
-```
-
-3. Build and run:
-```bash
+# Edit .env with KOMODO_API_KEY / KOMODO_API_SECRET / KOMODO_ADDRESS
+mkdir -p secrets
+openssl rand -hex 32 > secrets/mcp_auth_token
+echo "$KOMODO_API_KEY"    > secrets/komodo_api_key
+echo "$KOMODO_API_SECRET" > secrets/komodo_api_secret
 docker compose up -d
 ```
 
-4. Add to your Claude Code `.mcp.json`:
+The container binds `0.0.0.0:3113` internally but `docker-compose.yml` publishes the port only to host loopback (`127.0.0.1:3113:3113`). Front it with a reverse proxy when you need network access.
+
+### Add to Claude Code (`.mcp.json`)
+
+**Local / loopback** (no token needed):
 ```json
 {
   "mcpServers": {
     "komodo": {
-      "type": "sse",
-      "url": "http://localhost:3113/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:3113/mcp"
     }
   }
 }
 ```
 
-### Using npm
+**Networked** (token required):
+```json
+{
+  "mcpServers": {
+    "komodo": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${MCP_AUTH_TOKEN}" }
+    }
+  }
+}
+```
+
+### Local development (npm)
 
 ```bash
 npm install
 npm run build
-npm start
+npm start         # default streamable HTTP on 127.0.0.1:3113
+npm run dev:sse   # legacy SSE transport with a dev token
 ```
 
 ## Configuration
 
-| Environment Variable | Description | Default |
-|---------------------|-------------|---------|
-| `KOMODO_ADDRESS` | Komodo Core API URL | `http://localhost:9120` |
-| `KOMODO_API_KEY` | API key from Komodo | Required |
-| `KOMODO_API_SECRET` | API secret from Komodo | Required |
-| `MCP_PORT` | Port for SSE server | `3113` |
+### Komodo upstream
 
-### Getting API Credentials
+| Variable | Description | Default |
+|---|---|---|
+| `KOMODO_ADDRESS` | Komodo Core URL (http(s) only; trailing slash normalized) | required |
+| `KOMODO_API_KEY` | API key — also reads from `KOMODO_API_KEY_FILE` for Docker secrets | required |
+| `KOMODO_API_SECRET` | API secret — also reads from `KOMODO_API_SECRET_FILE` | required |
+| `KOMODO_TIMEOUT_MS` | Per-request timeout (single deadline across retries) | `30000` |
+| `KOMODO_MAX_RETRIES` | Max attempts for read operations (5xx/429/transient + pre-send transport errors) | `2` |
+| `KOMODO_MAX_CONCURRENCY` | In-flight request semaphore | `8` |
 
-1. Open your Komodo web UI
-2. Go to **Settings** (gear icon)
-3. Navigate to **API Keys**
-4. Click **Create API Key**
-5. Copy both the Key and Secret
+### MCP server
 
-## Available Tools
+| Variable | Description | Default |
+|---|---|---|
+| `MCP_TRANSPORT` | `streamable` (default), `sse` (legacy), or `stdio` | `streamable` |
+| `MCP_PORT` | HTTP listener port | `3113` |
+| `MCP_BIND_HOST` | Host to bind on | `127.0.0.1` (use `0.0.0.0` inside Docker) |
+| `MCP_AUTH_TOKEN` | Bearer token (also `MCP_AUTH_TOKEN_FILE`). When **unset**, only loopback callers are admitted. | unset |
+| `MCP_ALLOWED_ORIGINS` | Comma-separated `Origin` allow-list (browser CSRF defense). Empty = no `Origin` enforcement. | unset |
+| `MCP_ALLOWED_HOSTS` | Comma-separated `Host`-header allow-list (DNS-rebinding defense). | `127.0.0.1,localhost` |
+| `LOG_LEVEL` | Pino log level | `info` |
 
-### Read Operations (15 tools)
+### Getting Komodo API credentials
+
+1. Open the Komodo web UI
+2. Go to **Settings → API Keys**
+3. Click **Create API Key**, copy the key and secret
+
+## Security model
+
+This server holds Komodo admin credentials. A successful tool call can deploy code, prune systems, or destroy stacks on every Komodo-managed host. Treat it as privileged.
+
+The defaults aim for "secure by accident":
+
+- Bind is `127.0.0.1` unless explicitly opened.
+- `MCP_AUTH_TOKEN` is required for any non-loopback caller.
+- `Host` and `Origin` allow-lists block DNS rebinding even if a browser is tricked into reaching the loopback port.
+- All requests, including loopback, go through Helmet + CORS.
+- Errors emitted to MCP clients have the API key/secret scrubbed from upstream bodies.
+
+For non-loopback deployments use a reverse proxy that terminates TLS, set a random `MCP_AUTH_TOKEN` (`openssl rand -hex 32`), and configure `MCP_ALLOWED_HOSTS`/`MCP_ALLOWED_ORIGINS` for your domain. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) and [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+
+## Available tools
+
+35 tools registered from a single declarative table in `src/tools/registry.ts`. Annotations are applied consistently (`readOnlyHint` on read tools, `idempotentHint` on start/stop/restart, `destructiveHint` on prune/destroy/delete/`write_stack_contents`).
+
+### Read (15)
 
 | Tool | Description |
-|------|-------------|
+|---|---|
 | `komodo_list_servers` | List all connected servers |
-| `komodo_list_stacks` | List all stacks with status |
-| `komodo_list_deployments` | List all deployments |
-| `komodo_get_stack` | Get detailed stack information |
-| `komodo_get_stack_log` | Get stack deployment logs |
-| `komodo_get_container_log` | Get container logs |
-| `komodo_list_containers` | List Docker containers on a server |
-| `komodo_inspect_container` | Inspect container details |
-| `komodo_get_system_stats` | Get server system statistics |
-| `komodo_list_images` | List Docker images |
-| `komodo_list_networks` | List Docker networks |
-| `komodo_list_volumes` | List Docker volumes |
-| `komodo_get_alerts` | List system alerts |
-| `komodo_search_logs` | Search container logs |
-| `komodo_get_stack_services` | Get stack service status |
+| `komodo_list_stacks` | List stacks with state |
+| `komodo_list_deployments` | List deployments |
+| `komodo_get_stack` | Stack details |
+| `komodo_get_stack_log` | Stack deployment logs |
+| `komodo_get_container_log` | Container logs (`tail` 1–10000, default 100) |
+| `komodo_list_containers` | Containers on a server |
+| `komodo_inspect_container` | Inspect a container |
+| `komodo_get_system_stats` | CPU/memory/disk for a server |
+| `komodo_list_images` | Docker images |
+| `komodo_list_networks` | Docker networks |
+| `komodo_list_volumes` | Docker volumes |
+| `komodo_get_alerts` | Komodo alerts |
+| `komodo_search_logs` | Search container logs (1–20 terms, max 256 chars each) |
+| `komodo_get_stack_services` | Stack services summary |
 
-### Execute Operations (12 tools)
+### Execute (12)
 
-| Tool | Description |
-|------|-------------|
-| `komodo_deploy_stack` | Deploy/redeploy a stack |
-| `komodo_start_stack` | Start a stopped stack |
-| `komodo_stop_stack` | Stop a running stack |
-| `komodo_restart_stack` | Restart a stack |
-| `komodo_destroy_stack` | Stop and remove a stack |
-| `komodo_pull_stack` | Pull latest images for a stack |
-| `komodo_start_container` | Start a container |
-| `komodo_stop_container` | Stop a container |
-| `komodo_restart_container` | Restart a container |
-| `komodo_prune_images` | Remove unused images |
-| `komodo_prune_networks` | Remove unused networks |
-| `komodo_prune_system` | Full Docker system prune |
+| Tool | Hint | Description |
+|---|---|---|
+| `komodo_deploy_stack` | non-idempotent | Deploy/redeploy a stack |
+| `komodo_start_stack` | idempotent | Start a stopped stack |
+| `komodo_stop_stack` | idempotent | Stop a running stack |
+| `komodo_restart_stack` | idempotent | Restart a stack |
+| `komodo_destroy_stack` | **destructive** | Stop and remove |
+| `komodo_pull_stack` | idempotent | Pull latest images |
+| `komodo_start_container` | idempotent | Start a container |
+| `komodo_stop_container` | idempotent | Stop a container |
+| `komodo_restart_container` | idempotent | Restart a container |
+| `komodo_prune_images` | **destructive** | Prune unused images |
+| `komodo_prune_networks` | **destructive** | Prune unused networks |
+| `komodo_prune_system` | **destructive** | Full Docker system prune |
 
-### Write Operations (8 tools)
+### Write (8)
 
-| Tool | Description |
-|------|-------------|
-| `komodo_create_stack` | Create a new stack |
-| `komodo_update_stack` | Update stack configuration |
-| `komodo_delete_stack` | Delete a stack |
-| `komodo_write_stack_contents` | Write/update compose file |
-| `komodo_create_server` | Add a new server |
-| `komodo_update_server` | Update server configuration |
-| `komodo_delete_server` | Remove a server |
-| `komodo_rename_stack` | Rename a stack |
+| Tool | Hint | Description |
+|---|---|---|
+| `komodo_create_stack` | non-idempotent | Create a stack |
+| `komodo_update_stack` | non-idempotent | Update stack config (rejects secret-like keys) |
+| `komodo_delete_stack` | **destructive** | Delete a stack |
+| `komodo_write_stack_contents` | **destructive** | Overwrite compose contents (max 256 KiB) |
+| `komodo_create_server` | non-idempotent | Add a server |
+| `komodo_update_server` | non-idempotent | Update server config (rejects secret-like keys) |
+| `komodo_delete_server` | **destructive** | Remove a server |
+| `komodo_rename_stack` | non-idempotent | Rename a stack |
 
-## Example Usage
-
-Once connected, you can ask Claude Code things like:
+## Example prompts
 
 - "List all my Komodo stacks"
 - "Show me the logs for the nginx stack"
 - "Restart the wordpress stack"
 - "What containers are running on my server?"
 - "Deploy the staging stack"
-- "Show system stats for my server"
-
-## Security Considerations
-
-- **API credentials**: Store in environment variables, never commit `.env` files
-- **Network access**: By default, the MCP server listens on all interfaces. In production, consider restricting to localhost or using a reverse proxy
-- **Full access**: This server provides full Komodo API access including destructive operations. Use with caution.
-- **API key rotation**: Regularly rotate API keys in Komodo UI
 
 ## Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Build TypeScript
-npm run build
-
-# Watch mode for development
-npm run dev
-
-# Run the server
-npm start
-```
-
-## Docker Build
-
-```bash
-# Build image
-docker build -t komodo-mcp .
-
-# Run with environment variables
-docker run -d \
-  -e KOMODO_ADDRESS=http://your-komodo:9120 \
-  -e KOMODO_API_KEY=your-key \
-  -e KOMODO_API_SECRET=your-secret \
-  -p 3113:3113 \
-  komodo-mcp
+npm run lint     # biome
+npm run build    # tsc
+npm test         # node:test (56 tests, includes auth/secret/tool/format/smoke)
+npm run dev      # tsc --watch
 ```
 
 ## Architecture
 
 ```
 src/
-├── index.ts           # Entry point, SSE server setup
-├── server.ts          # MCP server configuration
-├── komodo-client.ts   # Komodo API client
+├── index.ts            # Express factory, transports, auth/Origin/Host gates, SIGTERM
+├── server.ts           # createServer(client?) — DI-friendly factory
+├── komodo-client.ts    # HTTP client: undici Agent, pooling, retry+jitter+single deadline
 └── tools/
-    ├── read.ts        # Read operation tools
-    ├── write.ts       # Write operation tools
-    └── execute.ts     # Execute operation tools
+    ├── registry.ts     # Declarative TOOLS table + registerAll(server, client)
+    └── utils.ts        # formatResult + toolHandler (errors → MCP isError)
 ```
 
-## API Reference
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for diagrams and the request-flow walk-through.
 
-This MCP server wraps the [Komodo Core API](https://komo.do/docs/api). The API uses a JSON-RPC style interface:
+## API reference
+
+The server wraps the [Komodo Core API](https://komo.do/docs/api). All Komodo requests are JSON over POST:
 
 ```bash
-# Example: List stacks
 curl -X POST http://your-komodo:9120/read \
   -H "Content-Type: application/json" \
   -H "X-Api-Key: YOUR_KEY" \
@@ -198,10 +214,10 @@ curl -X POST http://your-komodo:9120/read \
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file.
+MIT — see [LICENSE](LICENSE).
 
 ## Links
 
-- [Komodo Documentation](https://komo.do/docs)
+- [Komodo documentation](https://komo.do/docs)
 - [Komodo GitHub](https://github.com/moghtech/komodo)
-- [MCP Protocol](https://modelcontextprotocol.io)
+- [MCP protocol](https://modelcontextprotocol.io)

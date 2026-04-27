@@ -1,22 +1,57 @@
 services:
   komodo-mcp:
     build: .
-    image: komodo-mcp:latest
+    image: ghcr.io/nicolasestrem/komodo-mcp:latest
     container_name: komodo-mcp
+    init: true
     restart: unless-stopped
+    stop_grace_period: 30s
+    # Bind only on host loopback by default. To expose publicly, front this
+    # with a reverse proxy (see docs/DEPLOYMENT.md) or remove "127.0.0.1:".
     ports:
-      - "3113:3113"
+      - "127.0.0.1:3113:3113"
     environment:
-      - KOMODO_ADDRESS=${KOMODO_ADDRESS:-http://host.docker.internal:9120}
-      - KOMODO_API_KEY=${KOMODO_API_KEY}
-      - KOMODO_API_SECRET=${KOMODO_API_SECRET}
-      - MCP_TRANSPORT=sse
+      - NODE_ENV=production
+      # Inside the container, bind to 0.0.0.0 — the host port mapping is the
+      # actual network boundary.
+      - MCP_BIND_HOST=0.0.0.0
+      - MCP_TRANSPORT=streamable
       - MCP_PORT=3113
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-127.0.0.1,localhost}
+      - MCP_ALLOWED_ORIGINS=${MCP_ALLOWED_ORIGINS:-}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - KOMODO_ADDRESS=${KOMODO_ADDRESS:-http://host.docker.internal:9120}
+      # Read secrets from /run/secrets/* (Docker mounts them as files).
+      - KOMODO_API_KEY_FILE=/run/secrets/komodo_api_key
+      - KOMODO_API_SECRET_FILE=/run/secrets/komodo_api_secret
+      - MCP_AUTH_TOKEN_FILE=/run/secrets/mcp_auth_token
+      # Optional client tuning — uncomment to override defaults.
+      # - KOMODO_TIMEOUT_MS=30000
+      # - KOMODO_MAX_RETRIES=2
+      # - KOMODO_MAX_CONCURRENCY=8
+    secrets:
+      - komodo_api_key
+      - komodo_api_secret
+      - mcp_auth_token
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3113/health"]
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --tries=1
+        - --spider
+        - http://127.0.0.1:3113/health
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s
+
+secrets:
+  komodo_api_key:
+    file: ./secrets/komodo_api_key
+  komodo_api_secret:
+    file: ./secrets/komodo_api_secret
+  mcp_auth_token:
+    file: ./secrets/mcp_auth_token

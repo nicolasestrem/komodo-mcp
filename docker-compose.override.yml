@@ -1,0 +1,26 @@
+# Local-development overlay. Compose loads this automatically alongside
+# docker-compose.yml when you run plain `docker compose up`.
+#
+# Differences from base:
+#   - Verbose log level
+#   - Source bind-mount for live editing (paired with `npm run dev` on host)
+#   - No file-based secrets — use plain env from .env so devs don't need to
+#     populate ./secrets/* on every clone.
+
+services:
+  komodo-mcp:
+    environment:
+      - LOG_LEVEL=debug
+      - KOMODO_API_KEY=${KOMODO_API_KEY}
+      - KOMODO_API_SECRET=${KOMODO_API_SECRET}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-devtoken}
+      # Override the *_FILE pointers from the base compose so the env vars win.
+      - KOMODO_API_KEY_FILE=
+      - KOMODO_API_SECRET_FILE=
+      - MCP_AUTH_TOKEN_FILE=
+    # Don't reference any docker secrets in dev.
+    secrets: !reset []
+
+# Clear the top-level secrets so compose doesn't try to load files that
+# devs haven't created.
+secrets: !reset {}

@@ -1,484 +1,524 @@
 # API Reference
 
-Complete reference for all 35 MCP tools provided by Komodo MCP Server.
+Complete reference for all MCP tools provided by Komodo MCP Server.
 
-## Table of Contents
+## Tool annotations
 
-- [Read Operations (15 tools)](#read-operations)
-- [Execute Operations (12 tools)](#execute-operations)
-- [Write Operations (8 tools)](#write-operations)
+Each tool exposes MCP annotations that compatible clients (Claude Code, Inspector, …) use to drive UI affordances and confirmation prompts:
 
----
+- **`readOnlyHint: true`** — read tools that don't mutate state.
+- **`idempotentHint: true`** — execute/write tools that are safe to retry.
+- **`destructiveHint: true`** — `komodo_destroy_stack`, `komodo_prune_*`, `komodo_delete_*`, `komodo_write_stack_contents`. Clients should require explicit confirmation before invoking these.
+- **`openWorldHint: true`** — set on every tool because Komodo state can change between invocations.
 
-## Read Operations
+## Auth & transport
 
-Non-mutating operations for querying data from Komodo.
+Tool calls reach the server via Streamable HTTP (`POST /mcp`, default), legacy SSE (`/sse` + `/messages`), or stdio. HTTP transports require a bearer token unless the caller is on the loopback interface — see [`DEPLOYMENT.md`](DEPLOYMENT.md). All requests are authenticated to Komodo Core with `X-Api-Key` / `X-Api-Secret` headers; secrets are scrubbed from any error message returned to the MCP client.
 
-### komodo_list_servers
+## Input bounds
 
-List all Komodo servers with their status and configuration.
-
-**Parameters:** None
-
-**Returns:** Array of server objects with ID, name, address, and status.
-
----
-
-### komodo_list_stacks
-
-List all Komodo stacks with their current state (running/down).
-
-**Parameters:** None
-
-**Returns:** Array of stack objects with ID, name, server, and state.
+- `tail` (in `komodo_get_container_log`): integer 1–10000, default 100.
+- `terms` (in `komodo_search_logs`): array of 1–20 strings, each ≤256 characters.
+- `compose_contents` / `contents`: ≤256 KiB.
+- `update_stack` / `update_server` `config`: object whose keys do **not** match `api_key`, `api_secret`, `password`, `secret`, `webhook_secret`, `token` (with `_`/`-` variants).
 
 ---
 
-### komodo_list_deployments
+<!-- BEGIN AUTOGEN: tool catalog -->
 
-List all Komodo deployments.
+_This section is generated from `src/tools/registry.ts`. Do not edit by hand — run `npm run docs:api`._
 
-**Parameters:** None
+Total tools: **35** (read 15, execute 12, write 8).
 
-**Returns:** Array of deployment objects.
+## Read Operations (15 tools)
 
----
+### `komodo_list_servers`
 
-### komodo_get_stack
+**List Komodo servers** — List all Komodo servers with their status and configuration
 
-Get detailed information about a specific stack.
+- **Endpoint**: `read`
+- **Operation**: `ListServers`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `stack` | string | Yes | Stack name or ID |
+**Parameters**: none
 
-**Returns:** Detailed stack object including configuration and status.
+### `komodo_list_stacks`
 
----
+**List Komodo stacks** — List all Komodo stacks with their current state (running/down)
 
-### komodo_get_stack_log
+- **Endpoint**: `read`
+- **Operation**: `ListStacks`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
-Get deployment logs for a stack.
+**Parameters**: none
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `stack` | string | Yes | Stack name or ID |
+### `komodo_list_deployments`
 
-**Returns:** Log output from stack deployment operations.
+**List deployments** — List all Komodo deployments
 
----
+- **Endpoint**: `read`
+- **Operation**: `ListDeployments`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
-### komodo_get_container_log
+**Parameters**: none
 
-Get logs from a specific container.
+### `komodo_get_stack`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
-| `container` | string | Yes | Container name or ID |
-| `tail` | number | No | Number of lines to return (default: 100) |
+**Get stack details** — Get detailed information about a specific stack
 
-**Returns:** Container log output.
+- **Endpoint**: `read`
+- **Operation**: `GetStack`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
----
+**Parameters**:
 
-### komodo_list_containers
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `stack` | `string` | yes | — | — | Stack name or ID |
 
-List all Docker containers on a server.
+### `komodo_get_stack_log`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
+**Get stack log** — Get deployment logs for a stack
 
-**Returns:** Array of container objects with name, image, state, and status.
+- **Endpoint**: `read`
+- **Operation**: `GetStackLog`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
----
+**Parameters**:
 
-### komodo_inspect_container
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `stack` | `string` | yes | — | — | Stack name or ID |
 
-Get detailed information about a container.
+### `komodo_get_container_log`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
-| `container` | string | Yes | Container name or ID |
+**Get container log** — Get logs from a specific container
 
-**Returns:** Full Docker inspect output for the container.
+- **Endpoint**: `read`
+- **Operation**: `GetContainerLog`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
----
+**Parameters**:
 
-### komodo_get_system_stats
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
+| `container` | `string` | yes | — | — | Container name or ID |
+| `tail` | `number` | no | `100` | min 1; max 10000; integer | Number of lines to return (default: 100, max: 10000) |
 
-Get system statistics for a server (CPU, memory, disk).
+### `komodo_list_containers`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
+**List containers** — List all Docker containers on a server
 
-**Returns:** System metrics including CPU usage, memory usage, and disk space.
+- **Endpoint**: `read`
+- **Operation**: `ListDockerContainers`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
----
+**Parameters**:
 
-### komodo_list_images
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
 
-List all Docker images on a server.
+### `komodo_inspect_container`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
+**Inspect container** — Get detailed information about a container
 
-**Returns:** Array of image objects with repository, tag, and size.
+- **Endpoint**: `read`
+- **Operation**: `InspectDockerContainer`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
----
+**Parameters**:
 
-### komodo_list_networks
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
+| `container` | `string` | yes | — | — | Container name or ID |
 
-List all Docker networks on a server.
+### `komodo_get_system_stats`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
+**Get system stats** — Get system statistics for a server (CPU, memory, disk)
 
-**Returns:** Array of network objects with name, driver, and scope.
+- **Endpoint**: `read`
+- **Operation**: `GetSystemStats`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
----
+**Parameters**:
 
-### komodo_list_volumes
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
 
-List all Docker volumes on a server.
+### `komodo_list_images`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
+**List Docker images** — List all Docker images on a server
 
-**Returns:** Array of volume objects with name and driver.
+- **Endpoint**: `read`
+- **Operation**: `ListDockerImages`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
----
+**Parameters**:
 
-### komodo_get_alerts
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
 
-List all system alerts.
+### `komodo_list_networks`
 
-**Parameters:** None
+**List Docker networks** — List all Docker networks on a server
 
-**Returns:** Array of alert objects with severity and message.
+- **Endpoint**: `read`
+- **Operation**: `ListDockerNetworks`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
----
+**Parameters**:
 
-### komodo_search_logs
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
 
-Search container logs for specific terms.
+### `komodo_list_volumes`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
-| `container` | string | Yes | Container name or ID |
-| `terms` | string[] | Yes | Search terms to find in logs |
+**List Docker volumes** — List all Docker volumes on a server
 
-**Returns:** Log lines matching the search terms.
+- **Endpoint**: `read`
+- **Operation**: `ListDockerVolumes`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
----
+**Parameters**:
 
-### komodo_get_stack_services
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
 
-Get summary of all stacks with their services and status.
+### `komodo_get_alerts`
 
-**Parameters:** None
+**Get system alerts** — List all system alerts
 
-**Returns:** Summary object with all stacks and their service states.
+- **Endpoint**: `read`
+- **Operation**: `ListAlerts`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
----
+**Parameters**: none
 
-## Execute Operations
+### `komodo_search_logs`
 
-Runtime operations that affect running containers and stacks.
+**Search container logs** — Search container logs for specific terms
 
-### komodo_deploy_stack
+- **Endpoint**: `read`
+- **Operation**: `SearchContainerLog`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
-Deploy or redeploy a stack (pulls images and starts containers).
+**Parameters**:
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `stack` | string | Yes | Stack name or ID to deploy |
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
+| `container` | `string` | yes | — | — | Container name or ID |
+| `terms` | `array` | yes | — | min 1 entries; max 20 entries; each string max length 256 | Search terms to find in logs (1-20 entries, max 256 chars each) |
 
-**Returns:** Deployment result with status.
+### `komodo_get_stack_services`
 
----
+**Get stack services** — Get summary of all stacks with their services and status
 
-### komodo_start_stack
+- **Endpoint**: `read`
+- **Operation**: `GetStacksSummary`
+- **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
-Start a stopped stack.
+**Parameters**: none
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `stack` | string | Yes | Stack name or ID to start |
+## Execute Operations (12 tools)
 
-**Returns:** Operation result.
+### `komodo_deploy_stack`
 
----
+**Deploy stack** — Deploy or redeploy a stack (pulls images and starts containers)
 
-### komodo_stop_stack
+- **Endpoint**: `execute`
+- **Operation**: `DeployStack`
+- **Annotations**: `openWorldHint`
 
-Stop a running stack (keeps containers, just stops them).
+**Parameters**:
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `stack` | string | Yes | Stack name or ID to stop |
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `stack` | `string` | yes | — | — | Stack name or ID |
 
-**Returns:** Operation result.
+### `komodo_start_stack`
 
----
+**Start stack** — Start a stopped stack
 
-### komodo_restart_stack
+- **Endpoint**: `execute`
+- **Operation**: `StartStack`
+- **Annotations**: `idempotentHint`, `openWorldHint`
 
-Restart a stack (stop then start).
+**Parameters**:
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `stack` | string | Yes | Stack name or ID to restart |
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `stack` | `string` | yes | — | — | Stack name or ID |
 
-**Returns:** Operation result.
+### `komodo_stop_stack`
 
----
+**Stop stack** — Stop a running stack (keeps containers, just stops them)
 
-### komodo_destroy_stack
+- **Endpoint**: `execute`
+- **Operation**: `StopStack`
+- **Annotations**: `idempotentHint`, `openWorldHint`
 
-Destroy a stack (stops and removes containers).
+**Parameters**:
 
-> **WARNING:** This is a destructive operation!
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `stack` | `string` | yes | — | — | Stack name or ID |
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `stack` | string | Yes | Stack name or ID to destroy |
+### `komodo_restart_stack`
 
-**Returns:** Operation result.
+**Restart stack** — Restart a stack
 
----
+- **Endpoint**: `execute`
+- **Operation**: `RestartStack`
+- **Annotations**: `idempotentHint`, `openWorldHint`
 
-### komodo_pull_stack
+**Parameters**:
 
-Pull latest images for a stack without deploying.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `stack` | `string` | yes | — | — | Stack name or ID |
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `stack` | string | Yes | Stack name or ID |
+### `komodo_destroy_stack`
 
-**Returns:** Pull result with image status.
+**Destroy stack** — Destroy a stack (stops and removes containers). WARNING: destructive.
 
----
+- **Endpoint**: `execute`
+- **Operation**: `DestroyStack`
+- **Annotations**: **`destructiveHint`**, `openWorldHint`
 
-### komodo_start_container
+**Parameters**:
 
-Start a specific container.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `stack` | `string` | yes | — | — | Stack name or ID |
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
-| `container` | string | Yes | Container name or ID to start |
+### `komodo_pull_stack`
 
-**Returns:** Operation result.
+**Pull stack images** — Pull latest images for a stack without deploying
 
----
+- **Endpoint**: `execute`
+- **Operation**: `PullStackImages`
+- **Annotations**: `idempotentHint`, `openWorldHint`
 
-### komodo_stop_container
+**Parameters**:
 
-Stop a specific container.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `stack` | `string` | yes | — | — | Stack name or ID |
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
-| `container` | string | Yes | Container name or ID to stop |
+### `komodo_start_container`
 
-**Returns:** Operation result.
+**Start container** — Start a specific container
 
----
+- **Endpoint**: `execute`
+- **Operation**: `StartContainer`
+- **Annotations**: `idempotentHint`, `openWorldHint`
 
-### komodo_restart_container
+**Parameters**:
 
-Restart a specific container.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
+| `container` | `string` | yes | — | — | Container name or ID |
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
-| `container` | string | Yes | Container name or ID to restart |
+### `komodo_stop_container`
 
-**Returns:** Operation result.
+**Stop container** — Stop a specific container
 
----
+- **Endpoint**: `execute`
+- **Operation**: `StopContainer`
+- **Annotations**: `idempotentHint`, `openWorldHint`
 
-### komodo_prune_images
+**Parameters**:
 
-Remove unused Docker images from a server.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
+| `container` | `string` | yes | — | — | Container name or ID |
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
+### `komodo_restart_container`
 
-**Returns:** Prune result with reclaimed space.
+**Restart container** — Restart a specific container
 
----
+- **Endpoint**: `execute`
+- **Operation**: `RestartContainer`
+- **Annotations**: `idempotentHint`, `openWorldHint`
 
-### komodo_prune_networks
+**Parameters**:
 
-Remove unused Docker networks from a server.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
+| `container` | `string` | yes | — | — | Container name or ID |
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
+### `komodo_prune_images`
 
-**Returns:** Prune result.
+**Prune Docker images** — Remove unused Docker images from a server
 
----
+- **Endpoint**: `execute`
+- **Operation**: `PruneDockerImages`
+- **Annotations**: **`destructiveHint`**, `openWorldHint`
 
-### komodo_prune_system
+**Parameters**:
 
-Full Docker system prune (images, networks, volumes, build cache).
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
 
-> **WARNING:** This is a destructive operation!
+### `komodo_prune_networks`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `server` | string | Yes | Server name or ID |
+**Prune Docker networks** — Remove unused Docker networks from a server
 
-**Returns:** Prune result with reclaimed space.
+- **Endpoint**: `execute`
+- **Operation**: `PruneDockerNetworks`
+- **Annotations**: **`destructiveHint`**, `openWorldHint`
 
----
+**Parameters**:
 
-## Write Operations
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
 
-Configuration operations that create, update, or delete resources.
+### `komodo_prune_system`
 
-### komodo_create_stack
+**Prune Docker system** — Full Docker system prune (images, networks, volumes, build cache). WARNING: destructive.
 
-Create a new stack in Komodo.
+- **Endpoint**: `execute`
+- **Operation**: `PruneDockerSystem`
+- **Annotations**: **`destructiveHint`**, `openWorldHint`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `name` | string | Yes | Name for the new stack |
-| `server_id` | string | Yes | Server ID to deploy the stack on |
-| `compose_contents` | string | No | Docker Compose file contents (YAML) |
+**Parameters**:
 
-**Returns:** Created stack object with ID.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `server` | `string` | yes | — | — | Server name or ID |
 
----
+## Write Operations (8 tools)
 
-### komodo_update_stack
+### `komodo_create_stack`
 
-Update stack configuration.
+**Create stack** — Create a new stack in Komodo
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | Yes | Stack ID to update |
-| `config` | object | Yes | Configuration object to update |
+- **Endpoint**: `write`
+- **Operation**: `CreateStack`
+- **Annotations**: `openWorldHint`
 
-**Returns:** Updated stack object.
+**Parameters**:
 
----
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `name` | `string` | yes | — | min length 1; max length 256 | Name for the new stack |
+| `server_id` | `string` | yes | — | min length 1 | Server ID to deploy the stack on |
+| `compose_contents` | `string` | no | — | max length 256000 | Docker Compose file contents (YAML) |
 
-### komodo_delete_stack
+### `komodo_update_stack`
 
-Delete a stack from Komodo.
+**Update stack** — Update stack configuration. Secret-like keys (api_key, password, etc.) are rejected.
 
-> **WARNING:** This permanently removes the stack configuration!
+- **Endpoint**: `write`
+- **Operation**: `UpdateStack`
+- **Annotations**: `openWorldHint`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | Yes | Stack ID to delete |
+**Parameters**:
 
-**Returns:** Deletion confirmation.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `id` | `string` | yes | — | — | Resource ID |
+| `config` | `record` | yes | — | — | Configuration object to update (must not contain secret-like keys) |
 
----
+### `komodo_delete_stack`
 
-### komodo_write_stack_contents
+**Delete stack** — Delete a stack from Komodo. WARNING: permanently removes the stack.
 
-Write or update the Docker Compose file contents for a stack.
+- **Endpoint**: `write`
+- **Operation**: `DeleteStack`
+- **Annotations**: **`destructiveHint`**, `openWorldHint`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `stack` | string | Yes | Stack name or ID |
-| `contents` | string | Yes | Docker Compose file contents (YAML) |
+**Parameters**:
 
-**Returns:** Operation result.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `id` | `string` | yes | — | — | Resource ID |
 
----
+### `komodo_write_stack_contents`
 
-### komodo_create_server
+**Write stack contents** — Write or update the Docker Compose file contents for a stack. WARNING: overwrites existing contents.
 
-Add a new server to Komodo.
+- **Endpoint**: `write`
+- **Operation**: `WriteStackFileContents`
+- **Annotations**: **`destructiveHint`**, `openWorldHint`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `name` | string | Yes | Name for the new server |
-| `address` | string | Yes | Periphery address (e.g., https://periphery:8120) |
+**Parameters**:
 
-**Returns:** Created server object with ID.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `stack` | `string` | yes | — | — | Stack name or ID |
+| `contents` | `string` | yes | — | max length 256000 | Docker Compose file contents (YAML) |
 
----
+### `komodo_create_server`
 
-### komodo_update_server
+**Create server** — Add a new server to Komodo
 
-Update server configuration.
+- **Endpoint**: `write`
+- **Operation**: `CreateServer`
+- **Annotations**: `openWorldHint`
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | Yes | Server ID to update |
-| `config` | object | Yes | Configuration object to update |
+**Parameters**:
 
-**Returns:** Updated server object.
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `name` | `string` | yes | — | min length 1; max length 256 | Name for the new server |
+| `address` | `string` | yes | — | format: url | Periphery address (e.g., https://periphery:8120) |
 
----
+### `komodo_update_server`
 
-### komodo_delete_server
+**Update server** — Update server configuration. Secret-like keys (api_key, password, etc.) are rejected.
 
-Remove a server from Komodo.
+- **Endpoint**: `write`
+- **Operation**: `UpdateServer`
+- **Annotations**: `openWorldHint`
 
-> **WARNING:** This removes the server connection!
+**Parameters**:
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | Yes | Server ID to delete |
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `id` | `string` | yes | — | — | Resource ID |
+| `config` | `record` | yes | — | — | Configuration object to update (must not contain secret-like keys) |
 
-**Returns:** Deletion confirmation.
+### `komodo_delete_server`
 
----
+**Delete server** — Permanently delete a server entry from Komodo. WARNING: removes the server record.
 
-### komodo_rename_stack
+- **Endpoint**: `write`
+- **Operation**: `DeleteServer`
+- **Annotations**: **`destructiveHint`**, `openWorldHint`
 
-Rename a stack.
+**Parameters**:
 
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | Yes | Stack ID to rename |
-| `name` | string | Yes | New name for the stack |
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `id` | `string` | yes | — | — | Resource ID |
 
-**Returns:** Renamed stack object.
+### `komodo_rename_stack`
+
+**Rename stack** — Rename a stack
+
+- **Endpoint**: `write`
+- **Operation**: `RenameStack`
+- **Annotations**: `openWorldHint`
+
+**Parameters**:
+
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `id` | `string` | yes | — | — | Resource ID |
+| `name` | `string` | yes | — | min length 1; max length 256 | New stack name |
+
+<!-- END AUTOGEN: tool catalog -->
