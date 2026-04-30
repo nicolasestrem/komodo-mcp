@@ -1,6 +1,6 @@
 {
   "name": "komodo-mcp",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "MCP (Model Context Protocol) server for Komodo - Docker/container management",
   "type": "module",
   "main": "dist/index.js",
