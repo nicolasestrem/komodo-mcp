@@ -7,7 +7,6 @@ on:
 permissions:
   contents: write     # gh release
   packages: write     # GHCR
-  id-token: write     # npm publish --provenance
 
 concurrency:
   group: release-${{ github.ref }}
@@ -23,7 +22,6 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          registry-url: "https://registry.npmjs.org"
 
       - name: Install
         run: npm ci
@@ -36,11 +34,6 @@ jobs:
 
       - name: Test
         run: npm test
-
-      - name: Publish to npm (with provenance)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
