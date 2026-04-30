@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-04-30
+
 ### ⚠ BREAKING
 
 - **Default bind moved from `0.0.0.0` to `127.0.0.1`.** Set `MCP_BIND_HOST=0.0.0.0` (and `MCP_AUTH_TOKEN`) to expose on the network. Inside the official Docker image the default is already `0.0.0.0` — host port mapping controls exposure.
