@@ -64,7 +64,7 @@
     "@biomejs/biome": "^2.5.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
-    "@types/node": "^25.9.3",
+    "@types/node": "^26.0.0",
     "typescript": "^6.0.3"
   }
 }
