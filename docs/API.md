@@ -13,14 +13,16 @@ Each tool exposes MCP annotations that compatible clients (Claude Code, Inspecto
 
 ## Auth & transport
 
-Tool calls reach the server via Streamable HTTP (`POST /mcp`, default), legacy SSE (`/sse` + `/messages`), or stdio. HTTP transports require a bearer token unless the caller is on the loopback interface — see [`DEPLOYMENT.md`](DEPLOYMENT.md). All requests are authenticated to Komodo Core with `X-Api-Key` / `X-Api-Secret` headers; secrets are scrubbed from any error message returned to the MCP client.
+Tool calls reach the server via Streamable HTTP (`POST /mcp`, default), legacy SSE (`/sse` + `/messages`), or stdio. When `MCP_AUTH_TOKEN` is configured, every HTTP caller must send it; when it is unset, only loopback callers are admitted — see [`DEPLOYMENT.md`](DEPLOYMENT.md). Each HTTP session owns an isolated `McpServer` while sharing one upstream adapter. Unknown sessions return 404, idle sessions expire after `MCP_SESSION_IDLE_TIMEOUT_MS` (30 minutes by default), and CORS exposes `mcp-session-id`.
+
+The adapter delegates to official `komodo_client@2.1.1` calls that POST `params` bodies to `/read/<Operation>`, `/write/<Operation>`, or `/execute/<Operation>` with `X-Api-Key` / `X-Api-Secret` headers. It applies shared Undici pooling, an absolute timeout, a response-size limit, concurrency control, and secret redaction. Upstream operations are attempted once; there are no automatic retries.
 
 ## Input bounds
 
 - `tail` (in log tools): integer 1–5000, default 100.
 - `terms` (in `komodo_search_logs`): array of 1–20 strings, each ≤256 characters.
-- `compose_contents` / `contents`: ≤256 KiB.
-- `update_stack` / `update_server` `config`: object whose keys do **not** match `api_key`, `api_secret`, `password`, `secret`, `webhook_secret`, `token` (with `_`/`-` variants).
+- `compose_contents` / `contents`: maximum string length 256,000.
+- `update_stack` / `update_server` `config`: object whose keys do **not** begin with `api_key`, `api_secret`, `password`, `secret`, `webhook_secret`, or `token` (case-insensitive, with `_`/`-` variants).
 
 ---
 

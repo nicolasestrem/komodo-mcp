@@ -161,7 +161,10 @@ For legacy SSE (`MCP_TRANSPORT=sse`), the lifecycle is similar but split across 
 - 16 MiB maximum response body by default (`KOMODO_MAX_RESPONSE_BYTES`).
 - Eight concurrent upstream calls by default (`KOMODO_MAX_CONCURRENCY`), with TCP connection reuse through the shared Undici Agent.
 - Exactly one official-client call per tool invocation. There is no retry option; failures propagate immediately so write and execute operations cannot be duplicated by adapter policy.
+- Dispatcher predecessor links are rewired when an adapter closes, so injected or test adapters can close out of construction order without restoring an already-closed Agent as the process global dispatcher.
 - Errors are normalized as `Komodo API <endpoint> (<operation>) request failed: <detail>`, with API key and secret values scrubbed from the detail.
+
+This policy is recorded in [ADR 0005](adr/0005-official-client-no-retry-adapter.md), which supersedes the historical retry policy in ADR 0003.
 
 ## Authentication to Komodo Core
 

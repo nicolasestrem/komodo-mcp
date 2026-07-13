@@ -1,7 +1,10 @@
 # ADR 0003: Retry policy with shared deadline and pre-send retry
 
-**Status:** Accepted
+**Status:** Superseded by [ADR 0005](0005-official-client-no-retry-adapter.md)
 **Date:** 2026-04-27
+**Superseded:** 2026-07-13
+
+> Historical record: the retry design below describes the former custom HTTP client. It is not the current policy. The current adapter delegates once to the official `komodo_client@2.1.1`, never retries, and has no retry configuration. See ADR 0005.
 
 ## Context
 

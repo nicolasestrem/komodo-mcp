@@ -29,6 +29,7 @@ services:
       # - KOMODO_TIMEOUT_MS=30000
       # - KOMODO_MAX_CONCURRENCY=8
       # - KOMODO_MAX_RESPONSE_BYTES=16777216
+      # - MCP_MAX_SESSIONS=100
       # - MCP_SESSION_IDLE_TIMEOUT_MS=1800000
     secrets:
       - komodo_api_key

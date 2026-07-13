@@ -3,7 +3,6 @@
 #
 # Differences from base:
 #   - Verbose log level
-#   - Source bind-mount for live editing (paired with `npm run dev` on host)
 #   - No file-based secrets — use plain env from .env so devs don't need to
 #     populate ./secrets/* on every clone.
 

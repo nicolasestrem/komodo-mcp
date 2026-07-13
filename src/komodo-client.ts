@@ -49,6 +49,8 @@ export interface KomodoConfig {
 
 type OfficialClient = ReturnType<typeof createOfficialClient>;
 
+const dispatcherLinks = new Map<Dispatcher, { prior: Dispatcher }>();
+
 function readEnvOrFile(envName: string): string | undefined {
   const direct = process.env[envName];
   if (direct && direct.length > 0) return direct;
@@ -187,7 +189,6 @@ export class KomodoClient {
   #limit: ReturnType<typeof pLimit>;
   #agent: Agent;
   #dispatcher: Dispatcher;
-  #priorDispatcher: Dispatcher;
   #closed = false;
 
   constructor(config: KomodoConfig) {
@@ -213,7 +214,7 @@ export class KomodoClient {
       maxResponseSize: this.maxResponseBytes,
     });
     this.#dispatcher = this.#agent.compose(deadlineInterceptor(this.timeoutMs));
-    this.#priorDispatcher = getGlobalDispatcher();
+    dispatcherLinks.set(this.#dispatcher, { prior: getGlobalDispatcher() });
     setGlobalDispatcher(this.#dispatcher);
 
     this.#official = createOfficialClient(this.address, {
@@ -270,8 +271,15 @@ export class KomodoClient {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    if (getGlobalDispatcher() === this.#dispatcher) {
-      setGlobalDispatcher(this.#priorDispatcher);
+    const link = dispatcherLinks.get(this.#dispatcher);
+    if (link) {
+      for (const other of dispatcherLinks.values()) {
+        if (other.prior === this.#dispatcher) other.prior = link.prior;
+      }
+      if (getGlobalDispatcher() === this.#dispatcher) {
+        setGlobalDispatcher(link.prior);
+      }
+      dispatcherLinks.delete(this.#dispatcher);
     }
     await this.#agent.close();
   }

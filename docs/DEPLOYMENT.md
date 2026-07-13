@@ -22,16 +22,19 @@ Out of scope: per-tool authorization, audit log of tool invocations beyond pino 
 |---|---|---|
 | `npx komodo-mcp` (after publish) or `node dist/index.js` | streamable / stdio | Local CLI, direct integration |
 | Docker | streamable / sse | Containerized deployment |
-| Docker Compose (prod profile) | streamable | Hardened production runtime fronted by a reverse proxy |
+| Docker Compose (production overlay) | streamable | Hardened production runtime fronted by a reverse proxy |
 
 ## Environment variables
 
 ### Komodo upstream
 | Variable | Required | Default | Notes |
 |---|---|---|---|
-| `KOMODO_ADDRESS` | yes | — | http(s) only. Trailing slash normalized. |
-| `KOMODO_API_KEY` | yes | — | Or `KOMODO_API_KEY_FILE` for Docker secrets. |
-| `KOMODO_API_SECRET` | yes | — | Or `KOMODO_API_SECRET_FILE`. |
+| `KOMODO_ADDRESS` | conditional | — | http(s) only. Trailing slash normalized. Takes precedence over `KOMODO_ADDRESS_FILE`. |
+| `KOMODO_ADDRESS_FILE` | conditional | — | File containing the Komodo URL when `KOMODO_ADDRESS` is unset. |
+| `KOMODO_API_KEY` | conditional | — | API key. Takes precedence over `KOMODO_API_KEY_FILE`. |
+| `KOMODO_API_KEY_FILE` | conditional | — | File containing the API key when `KOMODO_API_KEY` is unset. |
+| `KOMODO_API_SECRET` | conditional | — | API secret. Takes precedence over `KOMODO_API_SECRET_FILE`. |
+| `KOMODO_API_SECRET_FILE` | conditional | — | File containing the API secret when `KOMODO_API_SECRET` is unset. |
 | `KOMODO_TIMEOUT_MS` | no | 30000 | Absolute deadline for one upstream request. |
 | `KOMODO_MAX_CONCURRENCY` | no | 8 | In-flight semaphore. |
 | `KOMODO_MAX_RESPONSE_BYTES` | no | 16777216 | Maximum upstream response body size (16 MiB). |
@@ -42,9 +45,11 @@ Out of scope: per-tool authorization, audit log of tool invocations beyond pino 
 | `MCP_TRANSPORT` | no | `streamable` | `streamable` (recommended), `sse` (legacy), `stdio`. |
 | `MCP_PORT` | no | 3113 | |
 | `MCP_BIND_HOST` | no | `127.0.0.1` | Use `0.0.0.0` inside Docker (port mapping is the boundary). |
-| `MCP_AUTH_TOKEN` | conditional | unset | Required for any non-loopback access. Or `MCP_AUTH_TOKEN_FILE`. |
+| `MCP_AUTH_TOKEN` | conditional | unset | Required for non-loopback access. Takes precedence over `MCP_AUTH_TOKEN_FILE`. |
+| `MCP_AUTH_TOKEN_FILE` | conditional | unset | File containing the auth token when `MCP_AUTH_TOKEN` is unset. |
 | `MCP_ALLOWED_ORIGINS` | no | unset | Comma-separated. Empty = no `Origin` enforcement. |
 | `MCP_ALLOWED_HOSTS` | no | `127.0.0.1,localhost` | Comma-separated. DNS-rebinding defense. |
+| `MCP_MAX_SESSIONS` | no | 100 | Maximum simultaneous sessions per process. Invalid values fall back to 100. |
 | `MCP_SESSION_IDLE_TIMEOUT_MS` | no | 1800000 | Idle lifetime for Streamable HTTP and legacy SSE sessions (30 minutes). |
 | `LOG_LEVEL` | no | `info` | Pino level. |
 
@@ -86,10 +91,12 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 By default the host binding is `127.0.0.1:3113:3113` — the port is reachable on localhost only. Front it with a reverse proxy that terminates TLS for public access.
 
 For local development, plain `docker compose up` automatically loads
-`docker-compose.override.yml`. That overlay leaves `MCP_AUTH_TOKEN` unset unless
-you provide one and relies on the loopback-only host binding. There is no
-predictable default token. The production command above does not use the local
-overlay and reads the generated token from its Docker secret.
+`docker-compose.override.yml`. That overlay has no predictable default token;
+set `MCP_AUTH_TOKEN` before starting Compose when a host client must connect.
+Host-to-container traffic is not a loopback request from the application's
+perspective, even though the published host port is loopback-only. The
+production command above does not use the local overlay and reads the generated
+token from its Docker secret.
 
 ### Method 2: Streamable HTTP via npm
 
@@ -101,6 +108,10 @@ KOMODO_ADDRESS=http://komodo:9120 \
 KOMODO_API_KEY=... KOMODO_API_SECRET=... \
 node dist/index.js
 ```
+
+If you keep these values in a `.env` file instead, export them before starting
+the process (for example, `set -a; source .env; set +a`). Node does not load the
+file automatically.
 
 ### Method 3: stdio (local CLI / Claude Desktop)
 
@@ -220,6 +231,7 @@ Add to your Claude Desktop config:
 - `KOMODO_MAX_CONCURRENCY` — bound concurrent requests to Komodo Core (default 8).
 - `KOMODO_TIMEOUT_MS` — absolute deadline for each upstream request (default 30000 ms).
 - `KOMODO_MAX_RESPONSE_BYTES` — maximum upstream response body (default 16777216 bytes).
+- `MCP_MAX_SESSIONS` — cap simultaneous HTTP sessions per process (default 100).
 - `MCP_SESSION_IDLE_TIMEOUT_MS` — expire inactive HTTP sessions (default 1800000 ms).
 - The shared `undici.Agent` keeps connections warm (30s keep-alive, 16 per-host).
 - Memory: ~50–100 MB per instance idle.

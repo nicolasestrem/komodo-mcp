@@ -11,6 +11,7 @@ RUN npm ci
 
 COPY tsconfig.json ./
 COPY src/ ./src/
+# The build script removes any previous dist/ output before compiling.
 RUN npm run build
 
 # ---------- Production stage ----------

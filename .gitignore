@@ -41,3 +41,6 @@ secrets/*
 
 # Local worktrees
 .worktrees/
+
+# Local agent planning artifacts
+/docs/superpowers*

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { KomodoClient } from "../dist/komodo-client.js";
 import { startUpstream } from "./helpers.js";
 
@@ -72,6 +73,18 @@ test("response body limit is enforced by the transport", async (t) => {
   t.after(() => client.close());
 
   await assert.rejects(client.call("read", "ListServers", {}), /100|response|exceed/i);
+});
+
+test("closing clients out of order restores the original dispatcher", async (t) => {
+  const original = getGlobalDispatcher();
+  t.after(() => setGlobalDispatcher(original));
+  const first = createClient("http://first.example.com");
+  const second = createClient("http://second.example.com");
+
+  await first.close();
+  await second.close();
+
+  assert.equal(getGlobalDispatcher(), original);
 });
 
 test("KOMODO_ADDRESS trailing slash is normalized", () => {

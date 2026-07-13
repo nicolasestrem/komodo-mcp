@@ -78,7 +78,7 @@ To add a tool: append a `spec({...})` row, run `npm test`. No new files needed.
 ### Komodo upstream
 | Variable | Description |
 |---|---|
-| `KOMODO_ADDRESS` | Komodo Core URL (http(s) only). Trailing slash normalized. |
+| `KOMODO_ADDRESS` | Komodo Core URL (http(s) only). Trailing slash normalized. `KOMODO_ADDRESS_FILE` reads it from a file. |
 | `KOMODO_API_KEY` | API key. `KOMODO_API_KEY_FILE` reads from a file (Docker secrets). |
 | `KOMODO_API_SECRET` | API secret. `KOMODO_API_SECRET_FILE` reads from a file. |
 | `KOMODO_TIMEOUT_MS` | Absolute per-request timeout. Default 30000. |
@@ -94,6 +94,7 @@ To add a tool: append a `spec({...})` row, run `npm test`. No new files needed.
 | `MCP_AUTH_TOKEN` | Bearer token. `MCP_AUTH_TOKEN_FILE` reads from file. **Unset = loopback-only.** |
 | `MCP_ALLOWED_ORIGINS` | Comma-separated `Origin` allow-list. |
 | `MCP_ALLOWED_HOSTS` | Comma-separated `Host`-header allow-list. Default `127.0.0.1,localhost`. |
+| `MCP_MAX_SESSIONS` | Maximum simultaneous HTTP sessions. Default 100; invalid values fall back to 100. |
 | `MCP_SESSION_IDLE_TIMEOUT_MS` | HTTP session idle timeout. Default 1800000 (30 minutes). |
 | `LOG_LEVEL` | Pino log level (default `info`). |
 
@@ -104,7 +105,9 @@ To add a tool: append a `spec({...})` row, run `npm test`. No new files needed.
 - `/execute/<Operation>` — runtime operations (`DeployStack`, `StartContainer`, etc.)
 - `/write/<Operation>` — configuration changes (`CreateStack`, `UpdateServer`, etc.)
 
-All requests include `X-Api-Key` and `X-Api-Secret` headers and use `params` as the request body. The custom adapter supplies a shared Undici pool, an absolute timeout, a 16 MiB default response limit, `p-limit` concurrency control, and secret redaction. It does not retry requests.
+All requests include `X-Api-Key` and `X-Api-Secret` headers and use `params` as the request body. The local adapter supplies a shared Undici pool, an absolute timeout, a 16 MiB default response limit, `p-limit` concurrency control, and secret redaction. It does not retry requests.
+
+Registry string limits are Zod string-length limits, not byte limits. In particular, `compose_contents` and `contents` have a maximum string length of 256,000.
 
 The official `komodo_client` package declares GPL-3.0. Any redistribution implications require a separate licensing review; do not treat this statement as a legal conclusion.
 

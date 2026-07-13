@@ -9,11 +9,11 @@ An MCP (Model Context Protocol) server that exposes [Komodo](https://komo.do) �
 - **Per-session `McpServer`** — concurrent clients are isolated
 - **Official `komodo_client` 2.1.1** for the upstream API contract
 - **Bearer-token auth** with constant-time compare; loopback-only fallback when no token is configured
-- **DNS-rebinding defense** via strict `Origin` and `Host` allow-lists
+- **DNS-rebinding defense** via a default `Host` allow-list and an optional `Origin` allow-list
 - **Helmet** security headers; **CORS** allow-list
 - **Pino** structured logs with `Authorization`/`X-Api-Secret`/`X-Api-Key` redaction
 - **Graceful shutdown** on `SIGTERM`/`SIGINT`
-- **Strict input schemas**: bounded `tail`, `terms`, `compose_contents`; `update_stack`/`update_server` reject keys matching `secret*`/`password*`/`api_key`/`token`
+- **Strict input schemas**: bounded `tail`, `terms`, `compose_contents`, and `contents`; update configs reject keys beginning with API-key, API-secret, password, secret, webhook-secret, or token variants
 - **Shared upstream adapter** with Undici pooling, an absolute timeout, a 16 MiB response cap, `p-limit` concurrency control, and secret redaction; requests are not retried
 
 ## Quick Start
@@ -23,20 +23,18 @@ An MCP (Model Context Protocol) server that exposes [Komodo](https://komo.do) �
 ```bash
 git clone https://github.com/nicolasestrem/komodo-mcp.git
 cd komodo-mcp
-cp .env.example .env
-# Edit .env with KOMODO_API_KEY / KOMODO_API_SECRET / KOMODO_ADDRESS
-mkdir -p secrets
-openssl rand -hex 32 > secrets/mcp_auth_token
-echo "$KOMODO_API_KEY"    > secrets/komodo_api_key
-echo "$KOMODO_API_SECRET" > secrets/komodo_api_secret
+export KOMODO_ADDRESS=http://host.docker.internal:9120
+export KOMODO_API_KEY='YOUR_KEY'
+export KOMODO_API_SECRET='YOUR_SECRET'
+export MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
 docker compose up -d
 ```
 
-The container binds `0.0.0.0:3113` internally but `docker-compose.yml` publishes the port only to host loopback (`127.0.0.1:3113:3113`). Front it with a reverse proxy when you need network access.
+Plain `docker compose` automatically loads the local-development override and passes these environment variables into the container. The container binds `0.0.0.0:3113` internally but `docker-compose.yml` publishes the port only to host loopback (`127.0.0.1:3113:3113`). Docker requests still cross a container-network boundary, so use the generated bearer token. Front the service with a reverse proxy when you need network access.
 
 ### Add to Claude Code (`.mcp.json`)
 
-**Local / loopback** (no token needed):
+**Local npm process / loopback** (no token needed when `MCP_AUTH_TOKEN` is unset):
 ```json
 {
   "mcpServers": {
@@ -48,18 +46,20 @@ The container binds `0.0.0.0:3113` internally but `docker-compose.yml` publishes
 }
 ```
 
-**Networked** (token required):
+**Docker** (token required):
 ```json
 {
   "mcpServers": {
     "komodo": {
       "type": "http",
-      "url": "https://mcp.example.com/mcp",
+      "url": "http://127.0.0.1:3113/mcp",
       "headers": { "Authorization": "Bearer ${MCP_AUTH_TOKEN}" }
     }
   }
 }
 ```
+
+For a networked deployment, replace the URL with the TLS endpoint exposed by your reverse proxy.
 
 ### Local development (npm)
 
@@ -76,7 +76,7 @@ npm run dev:sse   # legacy SSE transport with a dev token
 
 | Variable | Description | Default |
 |---|---|---|
-| `KOMODO_ADDRESS` | Komodo Core URL (http(s) only; trailing slash normalized) | required |
+| `KOMODO_ADDRESS` | Komodo Core URL (http(s) only; trailing slash normalized); also reads from `KOMODO_ADDRESS_FILE` | required |
 | `KOMODO_API_KEY` | API key — also reads from `KOMODO_API_KEY_FILE` for Docker secrets | required |
 | `KOMODO_API_SECRET` | API secret — also reads from `KOMODO_API_SECRET_FILE` | required |
 | `KOMODO_TIMEOUT_MS` | Absolute per-request timeout | `30000` |
@@ -93,6 +93,7 @@ npm run dev:sse   # legacy SSE transport with a dev token
 | `MCP_AUTH_TOKEN` | Bearer token (also `MCP_AUTH_TOKEN_FILE`). When **unset**, only loopback callers are admitted. | unset |
 | `MCP_ALLOWED_ORIGINS` | Comma-separated `Origin` allow-list (browser CSRF defense). Empty = no `Origin` enforcement. | unset |
 | `MCP_ALLOWED_HOSTS` | Comma-separated `Host`-header allow-list (DNS-rebinding defense). | `127.0.0.1,localhost` |
+| `MCP_MAX_SESSIONS` | Maximum simultaneous HTTP sessions; invalid values fall back to the default | `100` |
 | `MCP_SESSION_IDLE_TIMEOUT_MS` | Idle lifetime for HTTP sessions before cleanup | `1800000` (30 minutes) |
 | `LOG_LEVEL` | Pino log level | `info` |
 
@@ -110,7 +111,7 @@ The defaults aim for "secure by accident":
 
 - Bind is `127.0.0.1` unless explicitly opened.
 - `MCP_AUTH_TOKEN` is required for any non-loopback caller.
-- `Host` and `Origin` allow-lists block DNS rebinding even if a browser is tricked into reaching the loopback port.
+- The default `Host` allow-list blocks DNS rebinding even if a browser is tricked into reaching the loopback port; `MCP_ALLOWED_ORIGINS` adds optional browser Origin enforcement.
 - All requests, including loopback, go through Helmet + CORS.
 - Errors emitted to MCP clients have the API key/secret scrubbed from upstream bodies.
 
@@ -118,7 +119,7 @@ For non-loopback deployments use a reverse proxy that terminates TLS, set a rand
 
 ## Available tools
 
-35 tools registered from a single declarative table in `src/tools/registry.ts`. Annotations are applied consistently (`readOnlyHint` on read tools, `idempotentHint` on start/stop/restart, `destructiveHint` on prune/destroy/delete/`write_stack_contents`).
+35 tools are registered from a single declarative table in `src/tools/registry.ts`. Read tools carry `readOnlyHint` and `idempotentHint`; start/stop/restart and pull operations carry `idempotentHint`; prune/destroy/delete and `komodo_write_stack_contents` carry `destructiveHint`. Exact operation mappings and schemas are in [`docs/API.md`](docs/API.md).
 
 ### Read (15)
 
@@ -164,7 +165,7 @@ For non-loopback deployments use a reverse proxy that terminates TLS, set a rand
 | `komodo_create_stack` | non-idempotent | Create a stack |
 | `komodo_update_stack` | non-idempotent | Update stack config (rejects secret-like keys) |
 | `komodo_delete_stack` | **destructive** | Delete a stack |
-| `komodo_write_stack_contents` | **destructive** | Overwrite compose contents; requires `stack`, `file_path`, and `contents` (max 256 KiB) |
+| `komodo_write_stack_contents` | **destructive** | Overwrite compose contents; requires `stack`, `file_path`, and `contents` (max string length 256,000) |
 | `komodo_create_server` | non-idempotent | Add a server |
 | `komodo_update_server` | non-idempotent | Update server config (rejects secret-like keys) |
 | `komodo_delete_server` | **destructive** | Remove a server |
@@ -193,7 +194,7 @@ npm run dev      # tsc --watch
 ```
 src/
 ├── index.ts            # Express factory, transports, auth/Origin/Host gates, SIGTERM
-├── server.ts           # createServer(client?) — DI-friendly factory
+├── server.ts           # createServer({ client? }) — DI-friendly factory
 ├── komodo-client.ts    # Official client adapter: shared Undici pool, timeout/size/concurrency guards
 └── tools/
     ├── registry.ts     # Declarative TOOLS table + registerAll(server, client)

@@ -17,14 +17,21 @@ cd komodo-mcp
 npm install
 cp .env.example .env
 # fill in KOMODO_* and (for non-loopback) MCP_AUTH_TOKEN
+set -a
+source .env
+set +a
 npm run build
 npm start          # streamable transport, 127.0.0.1:3113
 ```
 
+Node does not load `.env` automatically; the `set -a` block exports its values
+to `npm start`. Docker Compose reads `.env` for interpolation automatically.
+
 Plain `docker compose up` also loads `docker-compose.override.yml`. The local
-overlay leaves `MCP_AUTH_TOKEN` unset by default and relies on the loopback-only
-host port mapping; it does not install a predictable development token. Set a
-token explicitly if you change the listener's exposure.
+overlay does not install a predictable development token. Set
+`MCP_AUTH_TOKEN` before starting Compose when a host client must connect:
+host-to-container traffic is not loopback from the application's perspective,
+even though the published host port is bound to `127.0.0.1`.
 
 ## Development commands
 
@@ -35,8 +42,8 @@ token explicitly if you change the listener's exposure.
 | `npm run format` | Biome auto-format |
 | `npm run build` | Compile TypeScript to `dist/` |
 | `npm run dev` | `tsc --watch` |
-| `npm run dev:streamable` | Start with a dev token, streamable transport |
-| `npm run dev:sse` | Start with a dev token, legacy SSE transport |
+| `npm run dev:streamable` | Run the existing build on loopback with fixed local token `devtoken` |
+| `npm run dev:sse` | Run the existing build in legacy SSE mode with fixed local token `devtoken` |
 | `npm test` | Build then run all node:test cases |
 | `npm start` | Run compiled server |
 | `npm run clean` | Remove `dist/` |
@@ -68,9 +75,14 @@ komodo-mcp/
 ├── tsconfig.json
 ├── Dockerfile
 ├── docker-compose.yml
+├── docker-compose.override.yml
 ├── docker-compose.prod.yml
 └── .env.example
 ```
+
+The two transport-specific development scripts run `dist/index.js`; run
+`npm run build` first. Their fixed token is intended only for the forced
+loopback bind. Plain Docker Compose does not use that token.
 
 ## Adding new tools
 
@@ -201,6 +213,7 @@ LOG_LEVEL=debug node dist/index.js
 ```bash
 docker build -t komodo-mcp .
 docker run --rm \
+  --add-host=host.docker.internal:host-gateway \
   -e KOMODO_ADDRESS=http://host.docker.internal:9120 \
   -e KOMODO_API_KEY=… -e KOMODO_API_SECRET=… \
   -e MCP_AUTH_TOKEN=$(openssl rand -hex 32) \

@@ -52,7 +52,7 @@ sed -i 's|komodo-mcp:latest|komodo-mcp:vPREV|' docker-compose.yml
 docker compose up -d komodo-mcp
 ```
 
-Sessions are lost on rollback. Clients on Streamable HTTP will reconnect automatically.
+Sessions are lost on rollback. Streamable HTTP clients must reconnect and initialize a new session.
 
 ## `/health` is failing
 
@@ -61,8 +61,9 @@ Sessions are lost on rollback. Clients on Streamable HTTP will reconnect automat
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Connection refused | Process not listening yet (still starting) or `MCP_BIND_HOST` wrong | Wait for `start_period`; check `MCP_BIND_HOST=0.0.0.0` inside Docker |
-| 200 but tool calls 500 | Komodo Core unreachable; `KOMODO_ADDRESS` wrong | Test `curl $KOMODO_ADDRESS` from inside the container |
-| 503 / OOM-kill | Memory limit too low; large log responses | Raise compose `deploy.resources.limits.memory`; lower `tail` defaults; cap `KOMODO_MAX_CONCURRENCY` |
+| 200 but tool results report an upstream error | Komodo Core unreachable; `KOMODO_ADDRESS` wrong | Test `curl $KOMODO_ADDRESS` from inside the container |
+| 503 on `/mcp` or `/sse` | The process reached `MCP_MAX_SESSIONS` | Let idle cleanup run, reconnect later, or raise the session cap |
+| Container OOM-killed | Memory limit too low; too many sessions or large responses | Raise the memory limit or lower `MCP_MAX_SESSIONS`, `KOMODO_MAX_RESPONSE_BYTES`, and `KOMODO_MAX_CONCURRENCY` |
 
 ## Stuck sessions
 
@@ -101,13 +102,13 @@ Set `KOMODO_ADDRESS` (or `KOMODO_ADDRESS_FILE`) to the new URL and roll the cont
 
 ## Observability
 
-Pino writes JSON to stderr. Each request log line includes `req.id`, `remoteAddress`, `responseTime`, and (on streamable) `sessionId`. `Authorization`, `X-Api-Key`, `X-Api-Secret` are redacted as `[redacted]`.
+Pino writes JSON to stderr. HTTP completion logs include request metadata and response time; session lifecycle logs include `sessionId`. `Authorization`, `X-Api-Key`, and `X-Api-Secret` fields are redacted as `[redacted]`.
 
 For aggregated logs, ship stderr to your log pipeline (Loki, ELK, Datadog) — Docker captures it automatically.
 
-A `/metrics` endpoint is not included today. Adding `prom-client` is tracked in the project's deferred work.
+A `/metrics` endpoint is not included today.
 
-Upstream calls are attempted once. Investigate the original network or Komodo error instead of expecting automatic recovery. Tune `KOMODO_TIMEOUT_MS`, `KOMODO_MAX_CONCURRENCY`, and `KOMODO_MAX_RESPONSE_BYTES` when needed.
+Upstream calls are attempted once. There is no retry setting; investigate the original network or Komodo error instead of expecting automatic recovery. Tune `KOMODO_TIMEOUT_MS`, `KOMODO_MAX_CONCURRENCY`, and `KOMODO_MAX_RESPONSE_BYTES` when needed. This is intentional per [ADR 0005](adr/0005-official-client-no-retry-adapter.md), which supersedes ADR 0003.
 
 ## Known limitations
 

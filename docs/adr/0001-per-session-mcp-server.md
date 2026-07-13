@@ -11,9 +11,12 @@ The MCP SDK's `McpServer` was historically constructed once at process start and
 
 Each new HTTP session (Streamable HTTP `/mcp` initialize, or legacy `/sse`) instantiates its own `McpServer` via `createServer()`. The `KomodoClient` is shared across sessions because it is stateless aside from the connection pool and concurrency semaphore.
 
+**Current implementation note (2026-07-13):** The isolation decision remains active, but the description of the shared client as stateless is no longer exact. One process-owned Komodo adapter is shared by all HTTP sessions and owns the official client, API credentials, concurrency limiter, and process-wide Undici dispatcher/Agent. Each session still owns a distinct `McpServer` and transport. See ADR 0005.
+
 ## Consequences
 
-- ✅ Sessions are completely isolated. A panic or `transport.close()` in one session cannot affect another.
+- ✅ MCP protocol and transport state are isolated by session. A `transport.close()` in one session does not close another session's `McpServer`.
+- ⚖️ Upstream connection-pool and concurrency state are deliberately process-wide rather than session-isolated.
 - ✅ The `closeAll()` shutdown path can iterate sessions cleanly.
 - ⚖️ Higher per-session memory: each `McpServer` holds the registered tools table. The 35-tool registry is small (~50 KB), acceptable.
 - ⚠️ A re-entry guard is needed in the cleanup path because `transport.close()` triggers `onclose` which calls `server.close()` which can call `transport.close()` again. Implemented via a `closing` boolean on each session.
