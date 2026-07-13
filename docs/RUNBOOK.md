@@ -25,7 +25,9 @@ For zero-downtime rotation we'd need dual-token validation (`MCP_AUTH_TOKEN` + `
 
 1. `httpServer.close()` stops accepting new connections; in-flight HTTP requests finish.
 2. `closeAll()` iterates the streamable + SSE session maps and calls `server.close()` on each.
-3. After 15 s a hard exit fires (configurable via the `setTimeout(...).unref()` in `src/index.ts`).
+3. After session cleanup, `closeAll()` closes the shared Komodo adapter and its Undici Agent.
+
+The 15-second hard-exit timer starts before either HTTP or session cleanup, so a hung close cannot extend the grace period indefinitely.
 
 In Docker:
 
@@ -64,13 +66,15 @@ Sessions are lost on rollback. Clients on Streamable HTTP will reconnect automat
 
 ## Stuck sessions
 
-Streamable HTTP sessions are stored in an in-process `Map`. If a client drops without proper close (network drop, kill -9 on the client), the session entry persists until the transport's `onclose` fires (typically after the next failed write).
+Streamable HTTP and legacy SSE sessions are stored in in-process maps. Each session has a resettable idle timer: activity restarts it, and cleanup runs after `MCP_SESSION_IDLE_TIMEOUT_MS` (default `1800000`, or 30 minutes), even if a disconnected client never closes cleanly.
 
-Symptoms: growing memory, healthcheck still green, `/health` reports more sessions than active clients.
+Symptoms: a client receives `404 Session not found` on a previously valid streamable session ID, or an SSE client loses its session after being inactive longer than the configured timeout. The healthcheck remains green because expired sessions are an expected lifecycle event.
 
-Fix: restart the container — sessions are not load-bearing across restarts.
+Fix:
 
-Long-term fix (planned): periodic stale-session sweeper based on last-activity timestamp.
+- Reinitialize/reconnect the MCP client; an unknown streamable session ID intentionally returns 404 and never creates a replacement session.
+- If legitimate operations sit idle longer than 30 minutes, raise `MCP_SESSION_IDLE_TIMEOUT_MS` and roll the container. The value must be a positive integer in milliseconds.
+- If sessions remain resident beyond the configured timeout, inspect for event-loop stalls and session close errors, then restart the container if cleanup cannot recover. Sessions are not durable across restarts.
 
 ## 401 unauthorized on `/mcp`
 
@@ -103,6 +107,8 @@ For aggregated logs, ship stderr to your log pipeline (Loki, ELK, Datadog) — D
 
 A `/metrics` endpoint is not included today. Adding `prom-client` is tracked in the project's deferred work.
 
+Upstream calls are attempted once. Investigate the original network or Komodo error instead of expecting automatic recovery. Tune `KOMODO_TIMEOUT_MS`, `KOMODO_MAX_CONCURRENCY`, and `KOMODO_MAX_RESPONSE_BYTES` when needed.
+
 ## Known limitations
 
 - Multi-replica deployments require sticky sessions (per-`mcp-session-id`). No external session store yet.
@@ -110,3 +116,4 @@ A `/metrics` endpoint is not included today. Adding `prom-client` is tracked in 
 - No readiness probe that round-trips to Komodo Core (only liveness).
 - No audit log of tool invocations beyond Pino request logs.
 - No rate limiting; a misbehaving client can DoS Komodo Core through this server.
+- The official `komodo_client@2.1.1` runtime dependency is GPL-3.0; redistribution of production bundles or images requires a GPL-3.0 compliance review.

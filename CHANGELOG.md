@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the custom Komodo wire protocol with the official `komodo_client` 2.1.1 contract: operation-specific `/read/<Operation>`, `/write/<Operation>`, and `/execute/<Operation>` POSTs with `params` bodies and API-key headers.
+- Kept process-wide safeguards in a narrow adapter: shared Undici pooling, an absolute timeout, a 16 MiB response cap, `p-limit` concurrency, and secret redaction. Requests are no longer retried; `KOMODO_MAX_RETRIES` is no longer supported, and `KOMODO_MAX_RESPONSE_BYTES` is configurable.
+- HTTP transports now share one upstream adapter across isolated per-session `McpServer` instances. Idle sessions default to 30 minutes (`MCP_SESSION_IDLE_TIMEOUT_MS`), unknown sessions return 404, and CORS exposes `mcp-session-id`.
+- Tightened tool contracts: log tails are capped at 5000, `get_stack_services` requires `stack`, and `write_stack_contents` requires `stack`, `file_path`, and `contents`.
+
+### Licensing
+
+- The official `komodo_client` package declares GPL-3.0. Redistribution requires a separate licensing review; this entry does not state a legal conclusion.
+
 ## [2.0.0] - 2026-04-30
 
 ### ⚠ BREAKING

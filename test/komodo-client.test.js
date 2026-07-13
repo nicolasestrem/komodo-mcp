@@ -118,7 +118,6 @@ test("fromEnv applies current optional transport tuning", async () => {
     process.env.KOMODO_TIMEOUT_MS = "5000";
     process.env.KOMODO_MAX_CONCURRENCY = "16";
     process.env.KOMODO_MAX_RESPONSE_BYTES = "12345";
-    delete process.env.KOMODO_MAX_RETRIES;
     const client = KomodoClient.fromEnv();
     assert.equal(client.timeoutMs, 5000);
     assert.equal(client.maxConcurrency, 16);

@@ -51,14 +51,17 @@ node dist/index.js
 ## Features
 
 - Streamable HTTP (default), legacy SSE, and stdio transports.
-- Per-session `McpServer`; no cross-session state.
+- Per-session `McpServer`; no cross-session MCP state, with one shared Komodo adapter and connection pool across HTTP sessions.
+- Streamable sessions are created only by initialize requests; unknown session IDs return 404, and CORS exposes `mcp-session-id` to browser clients.
+- Resettable 30-minute idle cleanup for streamable and legacy SSE sessions (`MCP_SESSION_IDLE_TIMEOUT_MS`).
 - Bearer-token auth with constant-time SHA-256 compare; loopback-only fallback.
 - Helmet + CORS + Origin/Host allow-list (DNS-rebinding defense).
 - Pino structured logs with header redaction.
 - Strict Zod input bounds; `update_*` rejects secret-like keys.
-- Connection pooling (`undici.Agent`) and concurrency cap (`p-limit`).
-- Single-deadline retry with jitter; pre-send transport errors retry on any verb.
-- `SIGTERM`/`SIGINT` graceful shutdown.
+- Official `komodo_client@2.1.1` calls to `POST /read/<Operation>`, `/write/<Operation>`, and `/execute/<Operation>` with params bodies and API-key headers.
+- Process-wide connection pooling (`undici.Agent`), concurrency cap (`p-limit`), absolute request deadline, response-size limit, and secret redaction.
+- No automatic retries: every upstream operation is attempted once.
+- `SIGTERM`/`SIGINT` graceful shutdown closes sessions before the shared adapter, bounded by a hard timer started before cleanup.
 
 ## Requirements
 
@@ -68,4 +71,6 @@ node dist/index.js
 
 ## License
 
-MIT License — see [LICENSE](../LICENSE) for details.
+The repository declares the MIT License; see [LICENSE](../LICENSE) for details.
+
+The official `komodo_client@2.1.1` runtime dependency is GPL-3.0. Review GPL-3.0 redistribution obligations before distributing a production bundle or container containing that dependency.

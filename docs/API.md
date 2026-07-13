@@ -7,7 +7,7 @@ Complete reference for all MCP tools provided by Komodo MCP Server.
 Each tool exposes MCP annotations that compatible clients (Claude Code, Inspector, …) use to drive UI affordances and confirmation prompts:
 
 - **`readOnlyHint: true`** — read tools that don't mutate state.
-- **`idempotentHint: true`** — execute/write tools that are safe to retry.
+- **`idempotentHint: true`** — execute/write tools that are safe to repeat.
 - **`destructiveHint: true`** — `komodo_destroy_stack`, `komodo_prune_*`, `komodo_delete_*`, `komodo_write_stack_contents`. Clients should require explicit confirmation before invoking these.
 - **`openWorldHint: true`** — set on every tool because Komodo state can change between invocations.
 
@@ -17,7 +17,7 @@ Tool calls reach the server via Streamable HTTP (`POST /mcp`, default), legacy S
 
 ## Input bounds
 
-- `tail` (in `komodo_get_container_log`): integer 1–10000, default 100.
+- `tail` (in log tools): integer 1–5000, default 100.
 - `terms` (in `komodo_search_logs`): array of 1–20 strings, each ≤256 characters.
 - `compose_contents` / `contents`: ≤256 KiB.
 - `update_stack` / `update_server` `config`: object whose keys do **not** match `api_key`, `api_secret`, `password`, `secret`, `webhook_secret`, `token` (with `_`/`-` variants).

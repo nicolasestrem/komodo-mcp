@@ -32,9 +32,9 @@ Out of scope: per-tool authorization, audit log of tool invocations beyond pino 
 | `KOMODO_ADDRESS` | yes | — | http(s) only. Trailing slash normalized. |
 | `KOMODO_API_KEY` | yes | — | Or `KOMODO_API_KEY_FILE` for Docker secrets. |
 | `KOMODO_API_SECRET` | yes | — | Or `KOMODO_API_SECRET_FILE`. |
-| `KOMODO_TIMEOUT_MS` | no | 30000 | Single deadline shared across retries. |
-| `KOMODO_MAX_RETRIES` | no | 2 | Read-op retries for 5xx/429/transient. |
+| `KOMODO_TIMEOUT_MS` | no | 30000 | Absolute deadline for one upstream request. |
 | `KOMODO_MAX_CONCURRENCY` | no | 8 | In-flight semaphore. |
+| `KOMODO_MAX_RESPONSE_BYTES` | no | 16777216 | Maximum upstream response body size (16 MiB). |
 
 ### MCP server
 | Variable | Required | Default | Notes |
@@ -45,7 +45,18 @@ Out of scope: per-tool authorization, audit log of tool invocations beyond pino 
 | `MCP_AUTH_TOKEN` | conditional | unset | Required for any non-loopback access. Or `MCP_AUTH_TOKEN_FILE`. |
 | `MCP_ALLOWED_ORIGINS` | no | unset | Comma-separated. Empty = no `Origin` enforcement. |
 | `MCP_ALLOWED_HOSTS` | no | `127.0.0.1,localhost` | Comma-separated. DNS-rebinding defense. |
+| `MCP_SESSION_IDLE_TIMEOUT_MS` | no | 1800000 | Idle lifetime for Streamable HTTP and legacy SSE sessions (30 minutes). |
 | `LOG_LEVEL` | no | `info` | Pino level. |
+
+## Komodo client and request model
+
+The server uses the official `komodo_client@2.1.1` package. Read, write, and
+execute operations are sent to `/read/<Operation>`, `/write/<Operation>`, and
+`/execute/<Operation>` respectively. One process-wide adapter and HTTP
+connection pool are shared by every MCP session; requests are not retried.
+
+The official package declares the GPL-3.0 license. Review redistribution and
+dependency-license obligations before publishing or redistributing a build.
 
 ## Getting Komodo API credentials
 
@@ -73,6 +84,12 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
 By default the host binding is `127.0.0.1:3113:3113` — the port is reachable on localhost only. Front it with a reverse proxy that terminates TLS for public access.
+
+For local development, plain `docker compose up` automatically loads
+`docker-compose.override.yml`. That overlay leaves `MCP_AUTH_TOKEN` unset unless
+you provide one and relies on the loopback-only host binding. There is no
+predictable default token. The production command above does not use the local
+overlay and reads the generated token from its Docker secret.
 
 ### Method 2: Streamable HTTP via npm
 
@@ -157,7 +174,11 @@ labels:
 
 ## Multi-replica caveat
 
-Sessions are stateful in-memory (per-session `McpServer`). Streamable HTTP propagates an `mcp-session-id` header which clients send on follow-up requests; multi-replica deployments need sticky sessions keyed on that header. Until then, run single-replica or fronted by a sticky-session-aware load balancer.
+Sessions are stateful in-memory (per-session `McpServer`) and expire after the
+configured idle timeout. Streamable HTTP propagates an `mcp-session-id` header
+which clients send on follow-up requests; multi-replica deployments need sticky
+sessions keyed on that header. Until then, run single-replica or fronted by a
+sticky-session-aware load balancer.
 
 ## Health monitoring
 
@@ -197,8 +218,9 @@ Add to your Claude Desktop config:
 ## Performance tuning
 
 - `KOMODO_MAX_CONCURRENCY` — bound concurrent requests to Komodo Core (default 8).
-- `KOMODO_MAX_RETRIES` — read retry budget; raise for flaky upstreams.
-- `KOMODO_TIMEOUT_MS` — single shared deadline across retries.
+- `KOMODO_TIMEOUT_MS` — absolute deadline for each upstream request (default 30000 ms).
+- `KOMODO_MAX_RESPONSE_BYTES` — maximum upstream response body (default 16777216 bytes).
+- `MCP_SESSION_IDLE_TIMEOUT_MS` — expire inactive HTTP sessions (default 1800000 ms).
 - The shared `undici.Agent` keeps connections warm (30s keep-alive, 16 per-host).
 - Memory: ~50–100 MB per instance idle.
 
