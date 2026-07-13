@@ -89,6 +89,9 @@ Total tools: **35** (read 15, execute 12, write 8).
 | Name | Type | Required | Default | Bounds | Description |
 |---|---|---|---|---|---|
 | `stack` | `string` | yes | — | — | Stack name or ID |
+| `services` | `array` | no | `[]` | max 100 entries; each string min length 1, max length 256 | — |
+| `tail` | `number` | no | `100` | min 1; max 5000; integer | — |
+| `timestamps` | `boolean` | no | `false` | — | — |
 
 ### `komodo_get_container_log`
 
@@ -104,7 +107,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 |---|---|---|---|---|---|
 | `server` | `string` | yes | — | — | Server name or ID |
 | `container` | `string` | yes | — | — | Container name or ID |
-| `tail` | `number` | no | `100` | min 1; max 10000; integer | Number of lines to return (default: 100, max: 10000) |
+| `tail` | `number` | no | `100` | min 1; max 5000; integer | Number of lines to return (default: 100, max: 5000) |
 
 ### `komodo_list_containers`
 
@@ -219,13 +222,17 @@ Total tools: **35** (read 15, execute 12, write 8).
 
 ### `komodo_get_stack_services`
 
-**Get stack services** — Get summary of all stacks with their services and status
+**Get stack services** — List services configured for a stack
 
 - **Endpoint**: `read`
-- **Operation**: `GetStacksSummary`
+- **Operation**: `ListStackServices`
 - **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
-**Parameters**: none
+**Parameters**:
+
+| Name | Type | Required | Default | Bounds | Description |
+|---|---|---|---|---|---|
+| `stack` | `string` | yes | — | — | Stack name or ID |
 
 ## Execute Operations (12 tools)
 
@@ -304,7 +311,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 **Pull stack images** — Pull latest images for a stack without deploying
 
 - **Endpoint**: `execute`
-- **Operation**: `PullStackImages`
+- **Operation**: `PullStack`
 - **Annotations**: `idempotentHint`, `openWorldHint`
 
 **Parameters**:
@@ -363,7 +370,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 **Prune Docker images** — Remove unused Docker images from a server
 
 - **Endpoint**: `execute`
-- **Operation**: `PruneDockerImages`
+- **Operation**: `PruneImages`
 - **Annotations**: **`destructiveHint`**, `openWorldHint`
 
 **Parameters**:
@@ -377,7 +384,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 **Prune Docker networks** — Remove unused Docker networks from a server
 
 - **Endpoint**: `execute`
-- **Operation**: `PruneDockerNetworks`
+- **Operation**: `PruneNetworks`
 - **Annotations**: **`destructiveHint`**, `openWorldHint`
 
 **Parameters**:
@@ -391,7 +398,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 **Prune Docker system** — Full Docker system prune (images, networks, volumes, build cache). WARNING: destructive.
 
 - **Endpoint**: `execute`
-- **Operation**: `PruneDockerSystem`
+- **Operation**: `PruneSystem`
 - **Annotations**: **`destructiveHint`**, `openWorldHint`
 
 **Parameters**:
@@ -460,6 +467,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 | Name | Type | Required | Default | Bounds | Description |
 |---|---|---|---|---|---|
 | `stack` | `string` | yes | — | — | Stack name or ID |
+| `file_path` | `string` | yes | — | min length 1; max length 4096 | Path to the stack file, for example compose.yaml |
 | `contents` | `string` | yes | — | max length 256000 | Docker Compose file contents (YAML) |
 
 ### `komodo_create_server`

@@ -9,7 +9,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { KomodoClient } from "../komodo-client.js";
+import type { KomodoClient, OperationFor } from "../komodo-client.js";
 import { toolHandler } from "./utils.js";
 
 type Endpoint = "read" | "write" | "execute";
@@ -28,12 +28,12 @@ type AnyZodShape = Record<string, z.ZodTypeAny>;
 // `exactOptionalPropertyTypes` will otherwise refuse to widen
 // `ToolSpec<{stack: ZodString}>` to `ToolSpec<AnyZodShape>`. The `spec()`
 // constructor below preserves per-spec type-checking at the definition site.
-type ToolSpec = {
+type ToolSpecFor<E extends Endpoint> = {
   name: string;
   title: string;
   description: string;
-  endpoint: Endpoint;
-  operation: string;
+  endpoint: E;
+  operation: OperationFor<E>;
   inputSchema: AnyZodShape;
   annotations: ToolAnnotations;
   // biome-ignore lint/suspicious/noExplicitAny: see comment above
@@ -42,16 +42,18 @@ type ToolSpec = {
   summary?: (args: any) => string;
 };
 
+type ToolSpec = { [E in Endpoint]: ToolSpecFor<E> }[Endpoint];
+
 type ZodObjectInfer<Shape extends AnyZodShape> = z.infer<z.ZodObject<Shape>>;
 
 // Per-spec generic constructor — gives the literal definition type-checking
 // against its own `inputSchema` while the array stores the widened shape.
-type ToolSpecInput<Shape extends AnyZodShape> = {
+type ToolSpecInput<E extends Endpoint, Shape extends AnyZodShape> = {
   name: string;
   title: string;
   description: string;
-  endpoint: Endpoint;
-  operation: string;
+  endpoint: E;
+  operation: OperationFor<E>;
   inputSchema: Shape;
   annotations: ToolAnnotations;
   buildParams?: (args: ZodObjectInfer<Shape>) => Record<string, unknown>;
@@ -146,7 +148,12 @@ export const TOOLS: ToolSpec[] = [
     description: "Get deployment logs for a stack",
     endpoint: "read",
     operation: "GetStackLog",
-    inputSchema: stackArg,
+    inputSchema: {
+      ...stackArg,
+      services: z.array(z.string().min(1).max(256)).max(100).default([]),
+      tail: z.number().int().min(1).max(5000).default(100),
+      timestamps: z.boolean().default(false),
+    },
     annotations: READ_ONLY,
     summary: ({ stack }) => `Retrieved logs for stack ${stack}.`,
   }),
@@ -163,9 +170,9 @@ export const TOOLS: ToolSpec[] = [
         .number()
         .int()
         .min(1)
-        .max(10_000)
+        .max(5000)
         .default(100)
-        .describe("Number of lines to return (default: 100, max: 10000)"),
+        .describe("Number of lines to return (default: 100, max: 5000)"),
     },
     annotations: READ_ONLY,
     summary: ({ container }) => `Retrieved logs for container ${container}.`,
@@ -261,12 +268,12 @@ export const TOOLS: ToolSpec[] = [
   spec({
     name: "komodo_get_stack_services",
     title: "Get stack services",
-    description: "Get summary of all stacks with their services and status",
+    description: "List services configured for a stack",
     endpoint: "read",
-    operation: "GetStacksSummary",
-    inputSchema: {},
+    operation: "ListStackServices",
+    inputSchema: stackArg,
     annotations: READ_ONLY,
-    summary: () => "Retrieved stack services summary.",
+    summary: ({ stack }) => `Retrieved services for stack ${stack}.`,
   }),
 
   // ===== EXECUTE =====
@@ -325,7 +332,7 @@ export const TOOLS: ToolSpec[] = [
     title: "Pull stack images",
     description: "Pull latest images for a stack without deploying",
     endpoint: "execute",
-    operation: "PullStackImages",
+    operation: "PullStack",
     inputSchema: stackArg,
     annotations: IDEMPOTENT_WRITE,
     summary: ({ stack }) => `Pulled images for stack ${stack}.`,
@@ -365,7 +372,7 @@ export const TOOLS: ToolSpec[] = [
     title: "Prune Docker images",
     description: "Remove unused Docker images from a server",
     endpoint: "execute",
-    operation: "PruneDockerImages",
+    operation: "PruneImages",
     inputSchema: serverArg,
     annotations: DESTRUCTIVE,
     summary: ({ server }) => `Pruned Docker images on server ${server}.`,
@@ -375,7 +382,7 @@ export const TOOLS: ToolSpec[] = [
     title: "Prune Docker networks",
     description: "Remove unused Docker networks from a server",
     endpoint: "execute",
-    operation: "PruneDockerNetworks",
+    operation: "PruneNetworks",
     inputSchema: serverArg,
     annotations: DESTRUCTIVE,
     summary: ({ server }) => `Pruned Docker networks on server ${server}.`,
@@ -386,7 +393,7 @@ export const TOOLS: ToolSpec[] = [
     description:
       "Full Docker system prune (images, networks, volumes, build cache). WARNING: destructive.",
     endpoint: "execute",
-    operation: "PruneDockerSystem",
+    operation: "PruneSystem",
     inputSchema: serverArg,
     annotations: DESTRUCTIVE,
     summary: ({ server }) => `Pruned Docker system on server ${server}.`,
@@ -444,6 +451,11 @@ export const TOOLS: ToolSpec[] = [
     operation: "WriteStackFileContents",
     inputSchema: {
       stack: z.string().describe("Stack name or ID"),
+      file_path: z
+        .string()
+        .min(1)
+        .max(4096)
+        .describe("Path to the stack file, for example compose.yaml"),
       contents: composeContents,
     },
     annotations: DESTRUCTIVE,
@@ -504,7 +516,8 @@ export function registerAll(server: McpServer, client: KomodoClient): void {
     const handler = toolHandler(
       async (args: Record<string, unknown>) => {
         const params = t.buildParams ? t.buildParams(args) : args;
-        // Task 2 tightens the registry table itself against OperationFor<E>.
+        // The widened discriminated union preserves table validation but generic
+        // call inference cannot retain its endpoint/operation correlation here.
         return client.call(t.endpoint, t.operation as never, params);
       },
       (args) => (t.summary ? t.summary(args) : `${t.name} succeeded.`)
@@ -526,6 +539,6 @@ export function registerAll(server: McpServer, client: KomodoClient): void {
 
 // Helper that preserves the Shape generic at the definition site so the inline
 // `summary`/`buildParams` callbacks see the inferred arg type.
-function spec<Shape extends AnyZodShape>(s: ToolSpecInput<Shape>): ToolSpec {
+function spec<E extends Endpoint, Shape extends AnyZodShape>(s: ToolSpecInput<E, Shape>): ToolSpec {
   return s as unknown as ToolSpec;
 }
