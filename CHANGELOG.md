@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Made the official Komodo client compatible with Node.js 25's unconfigured `localStorage` global, allowing API-key MCP requests to start and complete normally.
+
 ### Changed
 
 - Replaced the custom Komodo wire protocol with the official `komodo_client` 2.1.1 contract: operation-specific `/read/<Operation>`, `/write/<Operation>`, and `/execute/<Operation>` POSTs with `params` bodies and API-key headers.

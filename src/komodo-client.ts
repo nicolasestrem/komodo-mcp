@@ -6,9 +6,18 @@ import pLimit from "p-limit";
 import { Agent, type Dispatcher, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 
 // komodo_client 2.1.1 eagerly loads its browser auth dependency, which reads
-// localStorage even for API-key clients. Supply process-local storage before
-// dynamically evaluating the official package under Node.
-if (!("localStorage" in globalThis)) {
+// localStorage even for API-key clients. Node 25 exposes a localStorage global
+// without Web Storage methods unless it is configured with --localstorage-file,
+// so verify the interface rather than only checking that the name exists.
+const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const existingLocalStorage =
+  localStorageDescriptor && "value" in localStorageDescriptor
+    ? localStorageDescriptor.value
+    : undefined;
+if (
+  typeof existingLocalStorage?.getItem !== "function" ||
+  typeof existingLocalStorage.setItem !== "function"
+) {
   const values = new Map<string, string>();
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
