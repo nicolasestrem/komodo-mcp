@@ -25,7 +25,9 @@ For zero-downtime rotation we'd need dual-token validation (`MCP_AUTH_TOKEN` + `
 
 1. `httpServer.close()` stops accepting new connections; in-flight HTTP requests finish.
 2. `closeAll()` iterates the streamable + SSE session maps and calls `server.close()` on each.
-3. After 15 s a hard exit fires (configurable via the `setTimeout(...).unref()` in `src/index.ts`).
+3. After session cleanup, `closeAll()` closes the shared Komodo adapter and its Undici Agent.
+
+The 15-second hard-exit timer starts before either HTTP or session cleanup, so a hung close cannot extend the grace period indefinitely.
 
 In Docker:
 
@@ -50,7 +52,7 @@ sed -i 's|komodo-mcp:latest|komodo-mcp:vPREV|' docker-compose.yml
 docker compose up -d komodo-mcp
 ```
 
-Sessions are lost on rollback. Clients on Streamable HTTP will reconnect automatically.
+Sessions are lost on rollback. Streamable HTTP clients must reconnect and initialize a new session.
 
 ## `/health` is failing
 
@@ -59,18 +61,21 @@ Sessions are lost on rollback. Clients on Streamable HTTP will reconnect automat
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Connection refused | Process not listening yet (still starting) or `MCP_BIND_HOST` wrong | Wait for `start_period`; check `MCP_BIND_HOST=0.0.0.0` inside Docker |
-| 200 but tool calls 500 | Komodo Core unreachable; `KOMODO_ADDRESS` wrong | Test `curl $KOMODO_ADDRESS` from inside the container |
-| 503 / OOM-kill | Memory limit too low; large log responses | Raise compose `deploy.resources.limits.memory`; lower `tail` defaults; cap `KOMODO_MAX_CONCURRENCY` |
+| 200 but tool results report an upstream error | Komodo Core unreachable; `KOMODO_ADDRESS` wrong | Test `curl $KOMODO_ADDRESS` from inside the container |
+| 503 on `/mcp` or `/sse` | The process reached `MCP_MAX_SESSIONS` | Let idle cleanup run, reconnect later, or raise the session cap |
+| Container OOM-killed | Memory limit too low; too many sessions or large responses | Raise the memory limit or lower `MCP_MAX_SESSIONS`, `KOMODO_MAX_RESPONSE_BYTES`, and `KOMODO_MAX_CONCURRENCY` |
 
 ## Stuck sessions
 
-Streamable HTTP sessions are stored in an in-process `Map`. If a client drops without proper close (network drop, kill -9 on the client), the session entry persists until the transport's `onclose` fires (typically after the next failed write).
+Streamable HTTP and legacy SSE sessions are stored in in-process maps. Each session has a resettable idle timer: activity restarts it, and cleanup runs after `MCP_SESSION_IDLE_TIMEOUT_MS` (default `1800000`, or 30 minutes), even if a disconnected client never closes cleanly.
 
-Symptoms: growing memory, healthcheck still green, `/health` reports more sessions than active clients.
+Symptoms: a client receives `404 Session not found` on a previously valid streamable session ID, or an SSE client loses its session after being inactive longer than the configured timeout. The healthcheck remains green because expired sessions are an expected lifecycle event.
 
-Fix: restart the container — sessions are not load-bearing across restarts.
+Fix:
 
-Long-term fix (planned): periodic stale-session sweeper based on last-activity timestamp.
+- Reinitialize/reconnect the MCP client; an unknown streamable session ID intentionally returns 404 and never creates a replacement session.
+- If legitimate operations sit idle longer than 30 minutes, raise `MCP_SESSION_IDLE_TIMEOUT_MS` and roll the container. The value must be a positive integer in milliseconds.
+- If sessions remain resident beyond the configured timeout, inspect for event-loop stalls and session close errors, then restart the container if cleanup cannot recover. Sessions are not durable across restarts.
 
 ## 401 unauthorized on `/mcp`
 
@@ -97,11 +102,13 @@ Set `KOMODO_ADDRESS` (or `KOMODO_ADDRESS_FILE`) to the new URL and roll the cont
 
 ## Observability
 
-Pino writes JSON to stderr. Each request log line includes `req.id`, `remoteAddress`, `responseTime`, and (on streamable) `sessionId`. `Authorization`, `X-Api-Key`, `X-Api-Secret` are redacted as `[redacted]`.
+Pino writes JSON to stderr. HTTP completion logs include request metadata and response time; session lifecycle logs include `sessionId`. `Authorization`, `X-Api-Key`, and `X-Api-Secret` fields are redacted as `[redacted]`.
 
 For aggregated logs, ship stderr to your log pipeline (Loki, ELK, Datadog) — Docker captures it automatically.
 
-A `/metrics` endpoint is not included today. Adding `prom-client` is tracked in the project's deferred work.
+A `/metrics` endpoint is not included today.
+
+Upstream calls are attempted once. There is no retry setting; investigate the original network or Komodo error instead of expecting automatic recovery. Tune `KOMODO_TIMEOUT_MS`, `KOMODO_MAX_CONCURRENCY`, and `KOMODO_MAX_RESPONSE_BYTES` when needed. This is intentional per [ADR 0005](adr/0005-official-client-no-retry-adapter.md), which supersedes ADR 0003.
 
 ## Known limitations
 
@@ -110,3 +117,4 @@ A `/metrics` endpoint is not included today. Adding `prom-client` is tracked in 
 - No readiness probe that round-trips to Komodo Core (only liveness).
 - No audit log of tool invocations beyond Pino request logs.
 - No rate limiting; a misbehaving client can DoS Komodo Core through this server.
+- The official `komodo_client@2.1.1` runtime dependency is GPL-3.0; redistribution of production bundles or images requires a GPL-3.0 compliance review.

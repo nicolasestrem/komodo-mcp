@@ -14,6 +14,8 @@ The MCP spec dated 2025-03-26 deprecated the SSE-based two-endpoint transport (`
 - Stdio (`MCP_TRANSPORT=stdio`) remains the canonical local-CLI transport (Claude Desktop default).
 - Both HTTP transports use per-session `McpServer` (ADR 0001) and route through the same auth/Origin/Host middleware stack.
 
+**Current implementation note (2026-07-13):** The transport decision remains active with a narrower route surface than “all verbs”: `/mcp` mounts only `GET`, `POST`, and `DELETE`. A sessionless request creates state only when it is a `POST` initialize request; an unknown `mcp-session-id` returns 404. CORS exposes that response header. Streamable and legacy SSE sessions have resettable idle cleanup controlled by `MCP_SESSION_IDLE_TIMEOUT_MS` (30 minutes by default). Despite the historical one-minor-version removal plan above, legacy SSE remains implemented; removal requires a separate change.
+
 ## Consequences
 
 - ✅ One endpoint, one auth check, simpler middleware ordering.

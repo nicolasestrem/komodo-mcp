@@ -63,6 +63,7 @@ test("each tool routes to client.call with correct (endpoint, operation)", async
     if ("name" in t.inputSchema) out.name = "n";
     if ("server_id" in t.inputSchema) out.server_id = "srv-id";
     if ("address" in t.inputSchema) out.address = "https://periphery:8120";
+    if ("file_path" in t.inputSchema) out.file_path = "compose.yaml";
     if ("contents" in t.inputSchema) out.contents = "version: '3'";
     if ("compose_contents" in t.inputSchema) out.compose_contents = "version: '3'";
     if ("config" in t.inputSchema) out.config = { server_id: "srv" };
@@ -81,6 +82,36 @@ test("each tool routes to client.call with correct (endpoint, operation)", async
   }
 });
 
+test("current Komodo operations receive their required parameter shapes", async () => {
+  const cases = [
+    ["komodo_pull_stack", { stack: "s" }, ["execute", "PullStack", { stack: "s" }]],
+    ["komodo_prune_images", { server: "srv" }, ["execute", "PruneImages", { server: "srv" }]],
+    ["komodo_prune_networks", { server: "srv" }, ["execute", "PruneNetworks", { server: "srv" }]],
+    ["komodo_prune_system", { server: "srv" }, ["execute", "PruneSystem", { server: "srv" }]],
+    [
+      "komodo_get_stack_log",
+      { stack: "s" },
+      ["read", "GetStackLog", { stack: "s", services: [], tail: 100, timestamps: false }],
+    ],
+    ["komodo_get_stack_services", { stack: "s" }, ["read", "ListStackServices", { stack: "s" }]],
+    [
+      "komodo_write_stack_contents",
+      { stack: "s", file_path: "compose.yaml", contents: "services: {}" },
+      [
+        "write",
+        "WriteStackFileContents",
+        { stack: "s", file_path: "compose.yaml", contents: "services: {}" },
+      ],
+    ],
+  ];
+
+  for (const [name, args, expected] of cases) {
+    const { calls, callTool } = buildHarness();
+    await callTool(name, args);
+    assert.deepEqual(calls.at(-1).args, expected, name);
+  }
+});
+
 test("Zod rejects komodo_get_stack without `stack`", async () => {
   const { callTool } = buildHarness();
   await assert.rejects(callTool("komodo_get_stack", {}));
@@ -93,13 +124,13 @@ test("get_container_log default tail is applied", async () => {
   assert.equal(last.args[2].tail, 100);
 });
 
-test("get_container_log rejects tail < 1 and > 10000", async () => {
+test("get_container_log rejects tail < 1 and > 5000", async () => {
   const { callTool } = buildHarness();
   await assert.rejects(
     callTool("komodo_get_container_log", { server: "s", container: "c", tail: 0 })
   );
   await assert.rejects(
-    callTool("komodo_get_container_log", { server: "s", container: "c", tail: 100_000 })
+    callTool("komodo_get_container_log", { server: "s", container: "c", tail: 5001 })
   );
 });
 
@@ -142,7 +173,16 @@ test("update_server rejects api_secret key", async () => {
 test("write_stack_contents rejects oversize contents", async () => {
   const { callTool } = buildHarness();
   const huge = "y".repeat(300_000);
-  await assert.rejects(callTool("komodo_write_stack_contents", { stack: "s", contents: huge }));
+  await assert.rejects(
+    callTool("komodo_write_stack_contents", { stack: "s", contents: "services: {}" })
+  );
+  await assert.rejects(
+    callTool("komodo_write_stack_contents", {
+      stack: "s",
+      file_path: "compose.yaml",
+      contents: huge,
+    })
+  );
 });
 
 test("create_server rejects non-URL address", async () => {

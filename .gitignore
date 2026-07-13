@@ -38,3 +38,9 @@ secrets/*
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Local worktrees
+.worktrees/
+
+# Local agent planning artifacts
+/docs/superpowers*

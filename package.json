@@ -13,7 +13,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "npm run clean && tsc",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "dev:sse": "MCP_TRANSPORT=sse MCP_AUTH_TOKEN=devtoken MCP_BIND_HOST=127.0.0.1 node dist/index.js",
@@ -54,6 +54,7 @@
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "helmet": "^8.2.0",
+    "komodo_client": "^2.1.1",
     "p-limit": "^7.3.0",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
