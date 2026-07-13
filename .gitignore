@@ -38,3 +38,6 @@ secrets/*
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Local worktrees
+.worktrees/
