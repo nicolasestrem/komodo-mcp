@@ -13,7 +13,7 @@ services:
       - LOG_LEVEL=debug
       - KOMODO_API_KEY=${KOMODO_API_KEY}
       - KOMODO_API_SECRET=${KOMODO_API_SECRET}
-      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-devtoken}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
       # Override the *_FILE pointers from the base compose so the env vars win.
       - KOMODO_API_KEY_FILE=
       - KOMODO_API_SECRET_FILE=
