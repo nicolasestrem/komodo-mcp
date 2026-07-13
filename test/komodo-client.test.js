@@ -4,6 +4,11 @@ import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { KomodoClient } from "../dist/komodo-client.js";
 import { startUpstream } from "./helpers.js";
 
+test("provides the Web Storage methods required by the official client", () => {
+  assert.equal(typeof globalThis.localStorage?.getItem, "function");
+  assert.equal(typeof globalThis.localStorage?.setItem, "function");
+});
+
 function createClient(address, overrides = {}) {
   return new KomodoClient({
     address,
