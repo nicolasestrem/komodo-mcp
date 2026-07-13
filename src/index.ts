@@ -29,6 +29,7 @@ import type { Server as HttpServer } from "node:http";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import cors from "cors";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
@@ -179,7 +180,13 @@ export interface AppHandle {
 }
 
 export function buildApp(options: BuildAppOptions = {}): AppHandle {
-  const sharedClient = options.client;
+  const sharedClient = options.client ?? KomodoClient.fromEnv();
+
+  const sessionIdleTimeoutRaw = env["MCP_SESSION_IDLE_TIMEOUT_MS"] ?? "1800000";
+  const sessionIdleTimeoutMs = Number(sessionIdleTimeoutRaw);
+  if (!Number.isInteger(sessionIdleTimeoutMs) || sessionIdleTimeoutMs < 1) {
+    throw new Error(`Invalid MCP_SESSION_IDLE_TIMEOUT_MS: ${sessionIdleTimeoutRaw}`);
+  }
 
   const app = express();
   app.disable("x-powered-by");
@@ -210,6 +217,7 @@ export function buildApp(options: BuildAppOptions = {}): AppHandle {
       origin: ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : false,
       methods: ["GET", "POST", "DELETE", "OPTIONS"],
       credentials: false,
+      exposedHeaders: ["mcp-session-id"],
     })
   );
   app.use(express.json({ limit: "2mb" }));
@@ -226,8 +234,13 @@ export function buildApp(options: BuildAppOptions = {}): AppHandle {
   type StreamableSession = {
     transport: StreamableHTTPServerTransport;
     close: () => Promise<void>;
+    touch: () => void;
   };
-  type SseSession = { transport: SSEServerTransport; close: () => Promise<void> };
+  type SseSession = {
+    transport: SSEServerTransport;
+    close: () => Promise<void>;
+    touch: () => void;
+  };
   const streamableSessions: Map<string, StreamableSession> = new Map();
   const sseSessions: Map<string, SseSession> = new Map();
 
@@ -240,9 +253,9 @@ export function buildApp(options: BuildAppOptions = {}): AppHandle {
     Number.isInteger(maxSessionsParsed) && maxSessionsParsed > 0 ? maxSessionsParsed : 100;
 
   if (TRANSPORT === "streamable") {
-    mountStreamable(app, streamableSessions, sharedClient, MAX_SESSIONS);
+    mountStreamable(app, streamableSessions, sharedClient, MAX_SESSIONS, sessionIdleTimeoutMs);
   } else if (TRANSPORT === "sse") {
-    mountSse(app, sseSessions, sharedClient, MAX_SESSIONS);
+    mountSse(app, sseSessions, sharedClient, MAX_SESSIONS, sessionIdleTimeoutMs);
   }
 
   // Final 4-arg error middleware — converts any uncaught handler error into a
@@ -265,6 +278,7 @@ export function buildApp(options: BuildAppOptions = {}): AppHandle {
     streamableSessions.clear();
     sseSessions.clear();
     await Promise.all(ops);
+    await sharedClient.close();
   };
 
   return { app, closeAll };
@@ -274,17 +288,30 @@ export function buildApp(options: BuildAppOptions = {}): AppHandle {
 
 function mountStreamable(
   app: Express,
-  sessions: Map<string, { transport: StreamableHTTPServerTransport; close: () => Promise<void> }>,
-  sharedClient: KomodoClient | undefined,
-  maxSessions: number
+  sessions: Map<
+    string,
+    { transport: StreamableHTTPServerTransport; close: () => Promise<void>; touch: () => void }
+  >,
+  sharedClient: KomodoClient,
+  maxSessions: number,
+  sessionIdleTimeoutMs: number
 ): void {
   const handler = async (req: Request, res: Response) => {
     try {
       const sessionIdHeader = req.header("mcp-session-id") ?? undefined;
-      const existing = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
-
-      if (existing) {
+      if (sessionIdHeader) {
+        const existing = sessions.get(sessionIdHeader);
+        if (!existing) {
+          res.status(404).json({ error: "Session not found" });
+          return;
+        }
+        existing.touch();
         await existing.transport.handleRequest(req, res, req.body);
+        return;
+      }
+
+      if (req.method !== "POST" || !isInitializeRequest(req.body)) {
+        res.status(400).json({ error: "Initialization request required" });
         return;
       }
 
@@ -295,22 +322,32 @@ function mountStreamable(
       }
 
       // No existing session → create a new transport+server pair.
-      const { server } = createServer(sharedClient ? { client: sharedClient } : {});
+      const { server } = createServer({ client: sharedClient });
       // Re-entry guard: once we start tearing down, don't recurse through
       // server.close() ↔ transport.close() ↔ onclose.
       let closing = false;
+      let idleTimer: NodeJS.Timeout | undefined;
       const cleanup = async () => {
         if (closing) return;
         closing = true;
+        if (idleTimer) clearTimeout(idleTimer);
         const sid = transport.sessionId;
         if (sid) sessions.delete(sid);
         await server.close().catch(() => undefined);
+      };
+      const touch = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          cleanup().catch(() => undefined);
+        }, sessionIdleTimeoutMs);
+        idleTimer.unref();
       };
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid: string) => {
-          sessions.set(sid, { transport, close: cleanup });
+          sessions.set(sid, { transport, close: cleanup, touch });
+          touch();
           logger.info({ sessionId: sid }, "streamable session opened");
         },
         onsessionclosed: async (sid: string) => {
@@ -345,9 +382,13 @@ function mountStreamable(
 
 function mountSse(
   app: Express,
-  sessions: Map<string, { transport: SSEServerTransport; close: () => Promise<void> }>,
-  sharedClient: KomodoClient | undefined,
-  maxSessions: number
+  sessions: Map<
+    string,
+    { transport: SSEServerTransport; close: () => Promise<void>; touch: () => void }
+  >,
+  sharedClient: KomodoClient,
+  maxSessions: number,
+  sessionIdleTimeoutMs: number
 ): void {
   app.get("/sse", validateOriginAndHost, requireAuth, async (_req: Request, res: Response) => {
     if (sessions.size >= maxSessions) {
@@ -355,13 +396,29 @@ function mountSse(
       res.status(503).json({ error: "session capacity exhausted" });
       return;
     }
-    const { server } = createServer(sharedClient ? { client: sharedClient } : {});
+    const { server } = createServer({ client: sharedClient });
     const transport = new SSEServerTransport("/messages", res);
     const sessionId = transport.sessionId;
+    let closing = false;
+    let idleTimer: NodeJS.Timeout | undefined;
 
-    transport.onclose = async () => {
+    const cleanup = async () => {
+      if (closing) return;
+      closing = true;
+      if (idleTimer) clearTimeout(idleTimer);
       sessions.delete(sessionId);
       await server.close().catch(() => undefined);
+    };
+    const touch = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        cleanup().catch(() => undefined);
+      }, sessionIdleTimeoutMs);
+      idleTimer.unref();
+    };
+
+    transport.onclose = async () => {
+      await cleanup();
       logger.info({ sessionId }, "sse session closed");
     };
 
@@ -369,10 +426,10 @@ function mountSse(
       await server.connect(transport);
       sessions.set(sessionId, {
         transport,
-        close: async () => {
-          await server.close().catch(() => undefined);
-        },
+        close: cleanup,
+        touch,
       });
+      touch();
       logger.info({ sessionId }, "sse session opened");
     } catch (err) {
       sessions.delete(sessionId);
@@ -396,6 +453,7 @@ function mountSse(
       return;
     }
     try {
+      session.touch();
       await (session.transport as SSEServerTransport).handlePostMessage(req, res, req.body);
     } catch (err) {
       logger.error({ err }, "sse message handler failure");
@@ -436,16 +494,16 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: NodeJS.Signals) => {
     logger.info({ signal }, "shutdown initiated");
-    httpServer.close((err) => {
-      if (err) logger.error({ err }, "httpServer.close error");
-    });
-    await closeAll();
-    // Hard cap: if anything is hung, exit anyway after 15s.
+    // Start the hard deadline before awaiting any potentially hung cleanup.
     const hardExit = setTimeout(() => {
       logger.warn("forced exit after 15s grace period");
       process.exit(1);
     }, 15_000);
     hardExit.unref();
+    httpServer.close((err) => {
+      if (err) logger.error({ err }, "httpServer.close error");
+    });
+    await closeAll();
   };
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));

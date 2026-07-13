@@ -2,19 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readJson, startApp } from "./helpers.js";
 
-test("end-to-end: initialize via streamable HTTP returns the MCP greeting", async (t) => {
-  const handle = await startApp({
-    MCP_AUTH_TOKEN: "smoke-token",
-    MCP_ALLOWED_HOSTS: "127.0.0.1,localhost",
-  });
-  t.after(handle.close);
-
-  const res = await fetch(`${handle.baseUrl}/mcp`, {
+function initialize(baseUrl, token, origin) {
+  return fetch(`${baseUrl}/mcp`, {
     method: "POST",
     headers: {
-      authorization: "Bearer smoke-token",
+      authorization: `Bearer ${token}`,
       accept: "application/json, text/event-stream",
       "content-type": "application/json",
+      ...(origin ? { origin } : {}),
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -27,9 +22,35 @@ test("end-to-end: initialize via streamable HTTP returns the MCP greeting", asyn
       },
     }),
   });
+}
 
+function callToolsList(baseUrl, token, sessionId) {
+  return fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-session-id": sessionId,
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+  });
+}
+
+test("end-to-end: initialize returns the MCP greeting and exposes its session header", async (t) => {
+  const origin = "https://client.example";
+  const handle = await startApp({
+    MCP_AUTH_TOKEN: "smoke-token",
+    MCP_ALLOWED_HOSTS: "127.0.0.1,localhost",
+    MCP_ALLOWED_ORIGINS: origin,
+  });
+  t.after(handle.close);
+
+  const res = await initialize(handle.baseUrl, "smoke-token", origin);
   assert.equal(res.status, 200);
-  // Response is SSE: "event: message\ndata: { ... }\n\n"
+  assert.match(res.headers.get("access-control-expose-headers") ?? "", /mcp-session-id/i);
+  assert.ok(res.headers.get("mcp-session-id"));
+
   const text = await res.text();
   const match = text.match(/data: (\{.*\})/);
   assert.ok(match, `expected SSE data line in body: ${text.slice(0, 200)}`);
@@ -40,28 +61,32 @@ test("end-to-end: initialize via streamable HTTP returns the MCP greeting", asyn
   assert.ok(payload.result.capabilities.tools, "tools capability missing");
 });
 
-test("end-to-end: missing sessionId on subsequent /mcp request is handled by transport", async (t) => {
+test("unknown streamable session returns exact 404", async (t) => {
   const handle = await startApp({
     MCP_AUTH_TOKEN: "smoke-token",
     MCP_ALLOWED_HOSTS: "127.0.0.1,localhost",
   });
   t.after(handle.close);
 
-  const res = await fetch(`${handle.baseUrl}/mcp`, {
-    method: "POST",
-    headers: {
-      authorization: "Bearer smoke-token",
-      accept: "application/json, text/event-stream",
-      "content-type": "application/json",
-      "mcp-session-id": "non-existent-session",
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-  });
+  const res = await callToolsList(handle.baseUrl, "smoke-token", "non-existent-session");
+  assert.equal(res.status, 404);
+  assert.deepEqual(await readJson(res), { error: "Session not found" });
+});
 
-  // The SDK transport returns 400/404 for unknown sessions; we just assert
-  // we don't get a 5xx and there's a structured error body.
-  assert.notEqual(res.status, 500);
-  assert.ok(res.status >= 400 && res.status < 500);
-  const body = await readJson(res);
-  assert.ok(body, "expected JSON error body");
+test("idle streamable session expires", async (t) => {
+  const handle = await startApp({
+    MCP_AUTH_TOKEN: "smoke-token",
+    MCP_ALLOWED_HOSTS: "127.0.0.1,localhost",
+    MCP_SESSION_IDLE_TIMEOUT_MS: "25",
+  });
+  t.after(handle.close);
+
+  const initialized = await initialize(handle.baseUrl, "smoke-token");
+  const sessionId = initialized.headers.get("mcp-session-id");
+  assert.ok(sessionId);
+  await initialized.text();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  const res = await callToolsList(handle.baseUrl, "smoke-token", sessionId);
+  assert.equal(res.status, 404);
 });
