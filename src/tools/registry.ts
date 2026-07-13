@@ -504,7 +504,8 @@ export function registerAll(server: McpServer, client: KomodoClient): void {
     const handler = toolHandler(
       async (args: Record<string, unknown>) => {
         const params = t.buildParams ? t.buildParams(args) : args;
-        return client.call(t.endpoint, t.operation, params);
+        // Task 2 tightens the registry table itself against OperationFor<E>.
+        return client.call(t.endpoint, t.operation as never, params);
       },
       (args) => (t.summary ? t.summary(args) : `${t.name} succeeded.`)
     );

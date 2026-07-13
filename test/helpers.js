@@ -2,32 +2,31 @@ import { randomBytes } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import { KomodoClient } from "../dist/komodo-client.js";
 
-/**
- * Build a KomodoClient with a fake clock that fast-forwards setTimeout calls
- * but advances `Date.now()` by the requested delay. Lets tests assert backoff
- * schedules without paying real wall-clock time.
- */
 export function makeClient(opts = {}) {
-  const ticks = [];
-  let now = 1_000_000;
-  const clock = {
-    now: () => now,
-    sleep: async (ms) => {
-      ticks.push(ms);
-      now += ms;
-    },
-  };
   const client = new KomodoClient({
     address: opts.address ?? "http://komodo.invalid",
     apiKey: opts.apiKey ?? "k",
     apiSecret: opts.apiSecret ?? "s",
     timeoutMs: opts.timeoutMs ?? 30_000,
-    maxRetries: opts.maxRetries ?? 2,
     maxConcurrency: opts.maxConcurrency ?? 8,
-    clock,
     ...opts.extra,
   });
-  return { client, clock, ticks, advance: (ms) => (now += ms) };
+  return { client };
+}
+
+/** Start a disposable local HTTP server for real client integration tests. */
+export async function startUpstream(handler) {
+  const server = createHttpServer(handler);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () =>
+      new Promise((resolve) => {
+        server.closeAllConnections?.();
+        server.close(resolve);
+      }),
+  };
 }
 
 /**

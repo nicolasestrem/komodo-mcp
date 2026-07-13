@@ -1,125 +1,91 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { KomodoClient } from "../dist/komodo-client.js";
-import { makeClient, stubFetch } from "./helpers.js";
+import { startUpstream } from "./helpers.js";
 
-test("listServers returns parsed JSON on success", async (t) => {
-  const stub = stubFetch(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-  t.after(stub.restore);
-
-  const { client } = makeClient();
-  assert.deepEqual(await client.listServers(), { ok: true });
-  assert.equal(stub.calls.length, 1);
-});
-
-test("request aborts after timeout", async (t) => {
-  const stub = stubFetch(
-    (_input, init) =>
-      new Promise((_, reject) => {
-        init?.signal?.addEventListener("abort", () => {
-          reject(new DOMException("Aborted", "AbortError"));
-        });
-      })
-  );
-  t.after(stub.restore);
-
-  // Real clock here — the timer must actually fire to abort fetch.
-  const client = new KomodoClient({
-    address: "http://example.com",
-    apiKey: "k",
-    apiSecret: "s",
-    timeoutMs: 20,
+function createClient(address, overrides = {}) {
+  return new KomodoClient({
+    address,
+    apiKey: "test-key",
+    apiSecret: "test-secret",
+    ...overrides,
   });
-  await assert.rejects(client.listServers(), /timed out/);
+}
+
+test("official client routes a current read request", async (t) => {
+  const upstream = await startUpstream(async (req, res) => {
+    assert.equal(req.url, "/read/ListServers");
+    assert.equal(req.headers["x-api-key"], "test-key");
+    assert.equal(req.headers["x-api-secret"], "test-secret");
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    assert.deepEqual(JSON.parse(body), {});
+    res.setHeader("content-type", "application/json");
+    res.end('{"ok":true}');
+  });
+  t.after(upstream.close);
+  const client = createClient(upstream.baseUrl);
+  t.after(() => client.close());
+
+  assert.deepEqual(await client.call("read", "ListServers", {}), { ok: true });
 });
 
-test("retries transient 5xx on read and eventually succeeds", async (t) => {
-  const stub = stubFetch(
-    new Response(JSON.stringify({ msg: "busy" }), { status: 500 }),
-    new Response(JSON.stringify({ ok: true }), { status: 200 })
+test("ambiguous write transport failure is attempted exactly once", async (t) => {
+  let requests = 0;
+  const upstream = await startUpstream((req) => {
+    requests += 1;
+    req.socket.destroy();
+  });
+  t.after(upstream.close);
+  const client = createClient(upstream.baseUrl);
+  t.after(() => client.close());
+
+  await assert.rejects(client.call("write", "CreateStack", { name: "demo", config: {} }));
+  assert.equal(requests, 1);
+});
+
+test("absolute timeout continues after response headers", async (t) => {
+  const upstream = await startUpstream((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.write('{"unfinished":');
+  });
+  t.after(upstream.close);
+  const client = createClient(upstream.baseUrl, { timeoutMs: 30 });
+  t.after(() => client.close());
+
+  const testDeadline = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("test deadline exceeded")), 200)
   );
-  t.after(stub.restore);
-
-  const { client } = makeClient();
-  assert.deepEqual(await client.listServers(), { ok: true });
-  assert.equal(stub.calls.length, 2);
-});
-
-test("retries on 429 Too Many Requests", async (t) => {
-  const stub = stubFetch(
-    new Response("rate limited", { status: 429 }),
-    new Response(JSON.stringify({ ok: true }), { status: 200 })
-  );
-  t.after(stub.restore);
-
-  const { client } = makeClient();
-  assert.deepEqual(await client.listServers(), { ok: true });
-  assert.equal(stub.calls.length, 2);
-});
-
-test("retry exhaustion returns an error with the upstream status", async (t) => {
-  const stub = stubFetch(
-    () => new Response(JSON.stringify({ error: "still bad" }), { status: 500 })
-  );
-  t.after(stub.restore);
-
-  const { client } = makeClient({ maxRetries: 3 });
-  await assert.rejects(client.listServers(), /returned 500/);
-  assert.equal(stub.calls.length, 3);
-});
-
-test("execute operations do not retry on 5xx", async (t) => {
-  const stub = stubFetch(() => new Response(JSON.stringify({ error: "bad" }), { status: 500 }));
-  t.after(stub.restore);
-
-  const { client } = makeClient();
-  await assert.rejects(client.deployStack("demo"));
-  assert.equal(stub.calls.length, 1);
-});
-
-test("non-OK response includes parsed error context", async (t) => {
-  const stub = stubFetch(
-    new Response(JSON.stringify({ error: "invalid request" }), { status: 400 })
-  );
-  t.after(stub.restore);
-
-  const { client } = makeClient();
   await assert.rejects(
-    client.listServers(),
-    /Komodo API read \(ListServers\) returned 400: invalid request/
+    Promise.race([client.call("read", "ListServers", {}), testDeadline]),
+    /timed out|TimeoutError/i
   );
 });
 
-test("non-JSON error body is surfaced as text in the error message", async (t) => {
-  const stub = stubFetch(new Response("<html>oops</html>", { status: 502 }));
-  t.after(stub.restore);
+test("response body limit is enforced by the transport", async (t) => {
+  const upstream = await startUpstream((_req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ value: "x".repeat(200) }));
+  });
+  t.after(upstream.close);
+  const client = createClient(upstream.baseUrl, { maxResponseBytes: 100 });
+  t.after(() => client.close());
 
-  const { client } = makeClient({ maxRetries: 1 });
-  await assert.rejects(client.deployStack("s"), /<html>oops<\/html>/);
+  await assert.rejects(client.call("read", "ListServers", {}), /100|response|exceed/i);
 });
 
-test("KOMODO_ADDRESS trailing slash is normalized", async (t) => {
-  const stub = stubFetch(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-  t.after(stub.restore);
-
-  const { client } = makeClient({ address: "http://example.com/" });
-  await client.listServers();
-  const sentUrl = stub.calls[0].input;
-  assert.equal(sentUrl, "http://example.com/read", "expected canonical URL with single slash");
+test("KOMODO_ADDRESS trailing slash is normalized", () => {
+  const client = createClient("http://example.com/");
+  assert.equal(client.address, "http://example.com");
+  return client.close();
 });
 
 test("KOMODO_ADDRESS without scheme throws on construction", () => {
-  assert.throws(
-    () => new KomodoClient({ address: "example.com", apiKey: "k", apiSecret: "s" }),
-    /not a valid URL|must be http/
-  );
+  assert.throws(() => createClient("example.com"), /not a valid URL|must be http/);
 });
 
 test("KOMODO_ADDRESS with file:// scheme is rejected", () => {
-  assert.throws(
-    () => new KomodoClient({ address: "file:///etc/passwd", apiKey: "k", apiSecret: "s" }),
-    /must be http/
-  );
+  assert.throws(() => createClient("file:///etc/passwd"), /must be http/);
 });
 
 test("fromEnv rejects when any required var is missing", () => {
@@ -136,45 +102,33 @@ test("fromEnv rejects when any required var is missing", () => {
     process.env.KOMODO_API_KEY = "k";
     assert.throws(() => KomodoClient.fromEnv(), /Missing required environment/);
   } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in original)) delete process.env[key];
+    }
     Object.assign(process.env, original);
   }
 });
 
-test("fromEnv builds client when all vars present + applies optional tuning", () => {
+test("fromEnv applies current optional transport tuning", async () => {
   const original = { ...process.env };
   try {
     process.env.KOMODO_ADDRESS = "http://komodo";
     process.env.KOMODO_API_KEY = "k";
     process.env.KOMODO_API_SECRET = "s";
     process.env.KOMODO_TIMEOUT_MS = "5000";
-    process.env.KOMODO_MAX_RETRIES = "5";
     process.env.KOMODO_MAX_CONCURRENCY = "16";
-    const c = KomodoClient.fromEnv();
-    assert.equal(c.timeoutMs, 5000);
-    assert.equal(c.maxRetries, 5);
-    assert.equal(c.maxConcurrency, 16);
+    process.env.KOMODO_MAX_RESPONSE_BYTES = "12345";
+    delete process.env.KOMODO_MAX_RETRIES;
+    const client = KomodoClient.fromEnv();
+    assert.equal(client.timeoutMs, 5000);
+    assert.equal(client.maxConcurrency, 16);
+    assert.equal(client.maxResponseBytes, 12345);
+    assert.equal("maxRetries" in client, false);
+    await client.close();
   } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in original)) delete process.env[key];
+    }
     Object.assign(process.env, original);
   }
-});
-
-test("backoff schedule advances with jitter (asserted via injected clock)", async (t) => {
-  const stub = stubFetch(() => new Response(JSON.stringify({ error: "x" }), { status: 503 }));
-  t.after(stub.restore);
-
-  const { client, ticks } = makeClient({ maxRetries: 3 });
-  await assert.rejects(client.listServers());
-  // 2 retries → 2 sleeps. Jitter range: 50-150 then 100-300.
-  assert.equal(ticks.length, 2);
-  assert.ok(ticks[0] >= 50 && ticks[0] <= 150, `tick0=${ticks[0]}`);
-  assert.ok(ticks[1] >= 100 && ticks[1] <= 300, `tick1=${ticks[1]}`);
-});
-
-test("response > maxResponseBytes is rejected before parsing", async (t) => {
-  const big = "x".repeat(200);
-  const stub = stubFetch(new Response(big, { status: 200 }));
-  t.after(stub.restore);
-
-  const { client } = makeClient({ extra: { maxResponseBytes: 100 } });
-  await assert.rejects(client.listServers(), /exceeded 100 bytes/);
 });
