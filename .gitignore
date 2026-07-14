@@ -44,3 +44,8 @@ secrets/*
 
 # Local agent planning artifacts
 /docs/superpowers*
+/docs/agent-planning*
+/docs/adr*
+
+CLAUDE.md
+AGENTS.md
