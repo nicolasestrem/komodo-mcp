@@ -14,6 +14,8 @@ Earlier versions bound the SSE listener to `0.0.0.0:3113` with no authentication
 3. `MCP_ALLOWED_HOSTS` (default `127.0.0.1,localhost`) and `MCP_ALLOWED_ORIGINS` enforce a strict allow-list on `Host` and `Origin` headers — defense in depth against DNS-rebinding even when bound to loopback.
 4. `/health` remains anonymous so Docker healthchecks and reverse proxies can probe.
 
+**Current implementation note (2026-07-13):** The same auth and Origin/Host gates protect all mounted MCP HTTP entry points: `/mcp`, legacy `/sse`, and legacy `/messages`. CORS exposes `mcp-session-id` for streamable browser clients without exposing credentials.
+
 ## Consequences
 
 - ✅ The default no-config experience is "secure by accident": fresh checkouts only accept loopback.

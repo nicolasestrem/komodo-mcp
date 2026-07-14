@@ -16,6 +16,7 @@ services:
         limits:
           cpus: "1.0"
           memory: 512M
+          pids: 256
         reservations:
           memory: 128M
     # In production, reverse proxy fronts the service. Keep host port mapping

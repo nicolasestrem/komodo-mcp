@@ -6,7 +6,7 @@ Guide for setting up a development environment and contributing to Komodo MCP Se
 
 - Node.js **20.0.0+**
 - npm
-- Access to a Komodo Core API instance (or a fake fetch for tests)
+- Access to a Komodo Core API instance for manual integration testing
 - Git
 
 ## Getting started
@@ -17,9 +17,21 @@ cd komodo-mcp
 npm install
 cp .env.example .env
 # fill in KOMODO_* and (for non-loopback) MCP_AUTH_TOKEN
+set -a
+source .env
+set +a
 npm run build
 npm start          # streamable transport, 127.0.0.1:3113
 ```
+
+Node does not load `.env` automatically; the `set -a` block exports its values
+to `npm start`. Docker Compose reads `.env` for interpolation automatically.
+
+Plain `docker compose up` also loads `docker-compose.override.yml`. The local
+overlay does not install a predictable development token. Set
+`MCP_AUTH_TOKEN` before starting Compose when a host client must connect:
+host-to-container traffic is not loopback from the application's perspective,
+even though the published host port is bound to `127.0.0.1`.
 
 ## Development commands
 
@@ -30,9 +42,9 @@ npm start          # streamable transport, 127.0.0.1:3113
 | `npm run format` | Biome auto-format |
 | `npm run build` | Compile TypeScript to `dist/` |
 | `npm run dev` | `tsc --watch` |
-| `npm run dev:streamable` | Start with a dev token, streamable transport |
-| `npm run dev:sse` | Start with a dev token, legacy SSE transport |
-| `npm test` | Build then run all 56 node:test cases |
+| `npm run dev:streamable` | Run the existing build on loopback with fixed local token `devtoken` |
+| `npm run dev:sse` | Run the existing build in legacy SSE mode with fixed local token `devtoken` |
+| `npm test` | Build then run all node:test cases |
 | `npm start` | Run compiled server |
 | `npm run clean` | Remove `dist/` |
 
@@ -43,12 +55,12 @@ komodo-mcp/
 ├── src/
 │   ├── index.ts            # buildApp() factory, transports, middleware, SIGTERM
 │   ├── server.ts           # createServer({ client? })
-│   ├── komodo-client.ts    # KomodoClient
+│   ├── komodo-client.ts    # Adapter over official komodo_client
 │   └── tools/
 │       ├── registry.ts     # 35-tool TOOLS table + registerAll()
 │       └── utils.ts        # formatResult, toolHandler
 ├── test/
-│   ├── helpers.js          # makeClient, stubFetch, startApp, makeFakeClient, rawRequest
+│   ├── helpers.js          # local upstream, client/app factories, raw requests
 │   ├── auth.test.js        # token / Origin / Host gates
 │   ├── secret-leak.test.js # secrets never appear in errors / inspect output
 │   ├── tools.test.js       # 35-tool routing + Zod boundary cases
@@ -63,9 +75,14 @@ komodo-mcp/
 ├── tsconfig.json
 ├── Dockerfile
 ├── docker-compose.yml
+├── docker-compose.override.yml
 ├── docker-compose.prod.yml
 └── .env.example
 ```
+
+The two transport-specific development scripts run `dist/index.js`; run
+`npm run build` first. Their fixed token is intended only for the forced
+loopback bind. Plain Docker Compose does not use that token.
 
 ## Adding new tools
 
@@ -91,7 +108,7 @@ spec({
 }),
 ```
 
-The handler will be wired through `toolHandler` (so any thrown error becomes an MCP `isError` result) and call `client.call(t.endpoint, t.operation, params)` automatically.
+The handler will be wired through `toolHandler` (so any thrown error becomes an MCP `isError` result) and call `client.call(t.endpoint, t.operation, params)` automatically. The official client sends these operations to `/read/<Operation>`, `/write/<Operation>`, or `/execute/<Operation>`.
 
 ### 2. Add a wrapper on `KomodoClient` (optional)
 
@@ -115,21 +132,21 @@ Add the tool to README.md's tool tables and `docs/API.md`.
 
 ## Testing
 
-`npm test` runs `tsc` and then all `node --test` cases under `test/`. There are 56 cases as of writing.
+`npm test` runs `tsc` and then all `node --test` cases under `test/`.
 
 ### Test layout
 
 - `test/auth.test.js` — verifies `requireAuth`, `validateOriginAndHost`, `X-Powered-By` suppression, anonymous `/health`. Uses `startApp(env)` to boot a fresh Express app on an ephemeral port and `rawRequest` for tests that need to spoof the `Host` header (which `fetch` won't allow).
-- `test/secret-leak.test.js` — stubs upstream responses that echo `apiKey`/`apiSecret` and asserts the values never appear in thrown messages, `JSON.stringify(client)`, or `util.inspect(client)`.
-- `test/tools.test.js` — drives the registry with a Proxy-recording fake client. Asserts (a) 35 tools registered, (b) read tools carry `readOnlyHint`, destructive tools carry `destructiveHint`, (c) every tool routes to `client.call(endpoint, operation, params)` correctly, (d) `update_*` rejects secret-like config keys, (e) tail/terms/contents bounds are enforced, (f) `buildParams` nesting is correct, (g) handler exceptions surface as MCP `isError`.
+- `test/secret-leak.test.js` — uses a disposable local upstream that echoes `apiKey`/`apiSecret` and asserts the values never appear in thrown messages, `JSON.stringify(client)`, or `util.inspect(client)`.
+- `test/tools.test.js` — drives the registry with a Proxy-recording fake client. Asserts (a) 35 tools registered, (b) read tools carry `readOnlyHint`, destructive tools carry `destructiveHint`, (c) every tool routes to `client.call(endpoint, operation, params)` correctly, (d) `update_*` rejects secret-like config keys, (e) log `tail` is bounded to 1–5000 and other input bounds are enforced, (f) `buildParams` nesting is correct, (g) handler exceptions surface as MCP `isError`.
 - `test/format-result.test.js` — `formatResult` branches and `toolHandler` error/success paths.
-- `test/komodo-client.test.js` — retry/timeout/backoff (via injected `clock`), `KOMODO_ADDRESS` validation, `fromEnv` permutations, `maxResponseBytes` guard.
-- `test/smoke.test.js` — boots the server and runs an MCP initialize handshake against `/mcp`.
+- `test/komodo-client.test.js` — drives the official `komodo_client@2.1.1` adapter against a disposable local HTTP upstream. It verifies current request paths and API-key headers, single-attempt writes, absolute timeout, response-size enforcement, address validation, and `fromEnv` tuning.
+- `test/smoke.test.js` — boots the server and covers the MCP initialize handshake, session-header exposure, unknown-session handling, and idle session expiry.
 
 ### Test helpers (`test/helpers.js`)
 
-- `makeClient({ ... })` — `KomodoClient` with an injected fake clock that fast-forwards `sleep` and records the requested delays in `ticks` so tests can assert backoff.
-- `stubFetch(...responses)` — replaces `global.fetch` with a queue of `Response`/factories; restores via `restore()`.
+- `makeClient({ ... })` — constructs the adapter with safe test defaults.
+- `startUpstream(handler)` — starts a disposable local HTTP server for real adapter integration tests.
 - `makeFakeClient(stubResult)` — Proxy-based fake `KomodoClient` recording every method call.
 - `startApp(env, options)` — boots `buildApp()` on an ephemeral port. Re-imports `dist/index.js` with a cache-buster query string so module-level env reads pick up the override.
 - `rawRequest({ port, path, method, headers, body })` — raw `node:http` request for tests that need to override the `Host` header.
@@ -189,13 +206,14 @@ LOG_LEVEL=debug node dist/index.js
 2. **`401 unauthorized`** on `/mcp` — token mismatch, or the request came from a non-loopback IP without a token configured. Check pino logs for the request `remoteAddress`.
 3. **`403 forbidden host`** — `Host` header isn't in `MCP_ALLOWED_HOSTS`. Add the public hostname when fronted by a reverse proxy.
 4. **`500 internal error`** during the very first `/mcp` POST — usually `KomodoClient.fromEnv()` failing because env is incomplete. Check stderr.
-5. **Stuck SSE session after restart** — the server holds sessions in memory; clients on legacy SSE need to reconnect. Streamable HTTP clients should retry automatically.
+5. **Session disappeared after inactivity** — HTTP sessions are held in memory and expire after `MCP_SESSION_IDLE_TIMEOUT_MS` (30 minutes by default). Reinitialize the MCP connection; legacy SSE clients must reconnect.
 
 ## Building the Docker image
 
 ```bash
 docker build -t komodo-mcp .
 docker run --rm \
+  --add-host=host.docker.internal:host-gateway \
   -e KOMODO_ADDRESS=http://host.docker.internal:9120 \
   -e KOMODO_API_KEY=… -e KOMODO_API_SECRET=… \
   -e MCP_AUTH_TOKEN=$(openssl rand -hex 32) \

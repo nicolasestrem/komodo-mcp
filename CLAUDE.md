@@ -17,7 +17,7 @@ npm run lint             # Biome (lint + format check)
 npm run format           # Biome auto-format
 npm run build            # Compile TypeScript to dist/
 npm run dev              # Watch mode (auto-rebuild on changes)
-npm test                 # Build then run all node:test suites (56 tests)
+npm test                 # Build then run all node:test suites
 npm start                # Run the compiled server (streamable, loopback)
 npm run dev:streamable   # Start with a dev token + streamable transport
 npm run dev:sse          # Start with a dev token + legacy SSE transport
@@ -39,14 +39,16 @@ src/
 ├── index.ts            # Express buildApp(), transports (streamable/sse/stdio),
 │                       # auth/Origin/Host middleware, SIGTERM/SIGINT shutdown
 ├── server.ts           # createServer({ client? }) — DI-friendly McpServer factory
-├── komodo-client.ts    # KomodoClient: shared undici Agent, p-limit semaphore,
-│                       # single-deadline retry+jitter, secret redaction, *_FILE env
+├── komodo-client.ts    # Adapter around official komodo_client 2.1.1: shared
+│                       # Undici pool, absolute timeout, response cap, p-limit, redaction
 └── tools/
     ├── registry.ts     # Declarative TOOLS table (35 entries) + registerAll(server, client)
     └── utils.ts        # formatResult, toolHandler (errors → MCP isError result)
 ```
 
-**Request flow**: MCP client → HTTP middleware (Helmet → CORS → Origin/Host gate → bearer-token auth → pino-http) → transport (`StreamableHTTPServerTransport` on `/mcp`, or legacy `SSEServerTransport` on `/sse`+`/messages`) → per-session `McpServer` → `toolHandler` → `KomodoClient.call(endpoint, op, params)` → `/read|/execute|/write` on Komodo Core.
+**Request flow**: MCP client → HTTP middleware (Helmet → CORS → Origin/Host gate → bearer-token auth → pino-http) → transport (`StreamableHTTPServerTransport` on `/mcp`, or legacy `SSEServerTransport` on `/sse`+`/messages`) → per-session `McpServer` → `toolHandler` → shared `KomodoClient` adapter → official `komodo_client` → `/read/<Operation>` | `/execute/<Operation>` | `/write/<Operation>` on Komodo Core.
+
+The HTTP transports share one upstream adapter across their per-session `McpServer` instances. Idle sessions expire after `MCP_SESSION_IDLE_TIMEOUT_MS` (default 1800000 ms); requests with unknown session IDs return 404. CORS exposes `mcp-session-id`.
 
 **Transport selection** via `MCP_TRANSPORT`:
 - `streamable` (default) — single `/mcp` endpoint (POST + optional SSE upstream + DELETE)
@@ -76,12 +78,12 @@ To add a tool: append a `spec({...})` row, run `npm test`. No new files needed.
 ### Komodo upstream
 | Variable | Description |
 |---|---|
-| `KOMODO_ADDRESS` | Komodo Core URL (http(s) only). Trailing slash normalized. |
+| `KOMODO_ADDRESS` | Komodo Core URL (http(s) only). Trailing slash normalized. `KOMODO_ADDRESS_FILE` reads it from a file. |
 | `KOMODO_API_KEY` | API key. `KOMODO_API_KEY_FILE` reads from a file (Docker secrets). |
 | `KOMODO_API_SECRET` | API secret. `KOMODO_API_SECRET_FILE` reads from a file. |
-| `KOMODO_TIMEOUT_MS` | Per-request timeout (single deadline across retries). Default 30000. |
-| `KOMODO_MAX_RETRIES` | Read-op retry budget. Default 2. |
+| `KOMODO_TIMEOUT_MS` | Absolute per-request timeout. Default 30000. |
 | `KOMODO_MAX_CONCURRENCY` | In-flight semaphore. Default 8. |
+| `KOMODO_MAX_RESPONSE_BYTES` | Maximum response body size. Default 16777216 (16 MiB). |
 
 ### MCP server
 | Variable | Description |
@@ -92,25 +94,31 @@ To add a tool: append a `spec({...})` row, run `npm test`. No new files needed.
 | `MCP_AUTH_TOKEN` | Bearer token. `MCP_AUTH_TOKEN_FILE` reads from file. **Unset = loopback-only.** |
 | `MCP_ALLOWED_ORIGINS` | Comma-separated `Origin` allow-list. |
 | `MCP_ALLOWED_HOSTS` | Comma-separated `Host`-header allow-list. Default `127.0.0.1,localhost`. |
+| `MCP_MAX_SESSIONS` | Maximum simultaneous HTTP sessions. Default 100; invalid values fall back to 100. |
+| `MCP_SESSION_IDLE_TIMEOUT_MS` | HTTP session idle timeout. Default 1800000 (30 minutes). |
 | `LOG_LEVEL` | Pino log level (default `info`). |
 
 ## Komodo API Endpoints
 
-`KomodoClient.call(endpoint, operation, params)` POSTs to:
-- `/read` — non-mutating queries (`ListStacks`, `GetContainerLog`, etc.)
-- `/execute` — runtime operations (`DeployStack`, `StartContainer`, etc.)
-- `/write` — configuration changes (`CreateStack`, `UpdateServer`, etc.)
+`KomodoClient.call(endpoint, operation, params)` delegates to the official `komodo_client` 2.1.1 package, which POSTs to:
+- `/read/<Operation>` — non-mutating queries (`ListStacks`, `GetContainerLog`, etc.)
+- `/execute/<Operation>` — runtime operations (`DeployStack`, `StartContainer`, etc.)
+- `/write/<Operation>` — configuration changes (`CreateStack`, `UpdateServer`, etc.)
 
-All requests include `X-Api-Key` and `X-Api-Secret` headers with body `{ type, params }`. Errors propagate with secrets scrubbed before the message reaches the MCP client. Reads retry on 5xx/429 and on transient `TypeError`s with jittered exponential backoff and a single shared deadline; pre-send transport errors (DNS, ECONNREFUSED, etc.) retry on any verb.
+All requests include `X-Api-Key` and `X-Api-Secret` headers and use `params` as the request body. The local adapter supplies a shared Undici pool, an absolute timeout, a 16 MiB default response limit, `p-limit` concurrency control, and secret redaction. It does not retry requests.
+
+Registry string limits are Zod string-length limits, not byte limits. In particular, `compose_contents` and `contents` have a maximum string length of 256,000.
+
+The official `komodo_client` package declares GPL-3.0. Any redistribution implications require a separate licensing review; do not treat this statement as a legal conclusion.
 
 ## Testing
 
-`npm test` runs 56 node:test cases across `test/`:
+`npm test` runs the node:test suites across `test/`:
 - `auth.test.js` — bearer token, loopback fallback, Host/Origin allow-lists, X-Powered-By suppression
 - `secret-leak.test.js` — `apiKey`/`apiSecret` never appear in error messages or `JSON.stringify(client)`
 - `tools.test.js` — table-driven over all 35 tools: routing, Zod boundary cases, `buildParams` nesting, secret-key rejection in `update_*`
 - `format-result.test.js` — `formatResult` and `toolHandler` branches
-- `komodo-client.test.js` — retry/timeout/backoff (via injected `clock`), `fromEnv` permutations, response-size guard
+- `komodo-client.test.js` — official-client routing, timeout behavior, `fromEnv` permutations, response-size guard, and no-retry behavior
 - `smoke.test.js` — end-to-end `/mcp` initialize handshake
 
 Test helpers (`test/helpers.js`): `makeClient`, `stubFetch`, `makeFakeClient`, `startApp` (boots Express on an ephemeral port and returns `{ baseUrl, port, close }`), `rawRequest` (raw HTTP for tests that need to spoof `Host`).
