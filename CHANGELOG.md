@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-07-20
+
+### ⚠ BREAKING
+
+- **The custom Komodo wire protocol was replaced with the official `komodo_client` 2.1.1 contract.** Requests now go to operation-specific `/read/<Operation>`, `/write/<Operation>`, and `/execute/<Operation>` endpoints with `params` bodies.
+- **Requests are no longer retried, and `KOMODO_MAX_RETRIES` is no longer supported.** Deployments that set it should remove it; tune `KOMODO_TIMEOUT_MS` instead.
+
 ### Fixed
 
 - Made the official Komodo client compatible with Node.js 25's unconfigured `localStorage` global, allowing API-key MCP requests to start and complete normally.
