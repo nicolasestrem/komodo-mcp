@@ -54,7 +54,7 @@
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "helmet": "^8.3.0",
-    "komodo_client": "^2.3.1",
+    "komodo_client": "^2.3.2",
     "p-limit": "^7.3.1",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
