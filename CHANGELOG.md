@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Updated the five Docker inventory tool operations to the names used by `komodo_client` 2.3 and later, restoring TypeScript compatibility and correct Komodo read routes.
+
 ## [3.0.0] - 2026-07-20
 
 ### ⚠ BREAKING
