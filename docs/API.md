@@ -116,7 +116,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 **List containers** — List all Docker containers on a server
 
 - **Endpoint**: `read`
-- **Operation**: `ListDockerContainers`
+- **Operation**: `ListContainers`
 - **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
 **Parameters**:
@@ -130,7 +130,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 **Inspect container** — Get detailed information about a container
 
 - **Endpoint**: `read`
-- **Operation**: `InspectDockerContainer`
+- **Operation**: `InspectContainer`
 - **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
 **Parameters**:
@@ -159,7 +159,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 **List Docker images** — List all Docker images on a server
 
 - **Endpoint**: `read`
-- **Operation**: `ListDockerImages`
+- **Operation**: `ListImages`
 - **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
 **Parameters**:
@@ -173,7 +173,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 **List Docker networks** — List all Docker networks on a server
 
 - **Endpoint**: `read`
-- **Operation**: `ListDockerNetworks`
+- **Operation**: `ListNetworks`
 - **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
 **Parameters**:
@@ -187,7 +187,7 @@ Total tools: **35** (read 15, execute 12, write 8).
 **List Docker volumes** — List all Docker volumes on a server
 
 - **Endpoint**: `read`
-- **Operation**: `ListDockerVolumes`
+- **Operation**: `ListVolumes`
 - **Annotations**: `readOnlyHint`, `idempotentHint`, `openWorldHint`
 
 **Parameters**:
