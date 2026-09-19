@@ -62,10 +62,10 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.12",
+    "@biomejs/biome": "^2.5.13",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
-    "@types/node": "^26.5.0",
+    "@types/node": "^26.5.1",
     "typescript": "^7.0.2"
   }
 }
